@@ -1,0 +1,19 @@
+# Buildroot output and downloads
+output/
+dl/
+*.img
+*.qcow2
+*.iso
+
+# C build artifacts
+*.o
+*.a
+*.so
+compositor/build/
+shell/build/
+
+# Editors / OS
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
