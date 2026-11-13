@@ -70,6 +70,9 @@ BR2_PACKAGE_PERKINSOS_SHELL=y
 # A Wayland terminal to have something to open, and a font for it.
 BR2_PACKAGE_FOOT=y
 BR2_PACKAGE_DEJAVU=y
+# wayland-info: lists the protocols the running compositor offers.
+# Used in docs/WEEK4.md to check layer-shell is advertised.
+BR2_PACKAGE_WAYLAND_UTILS=y
 
 # Root filesystem: one ext4 image, attached to QEMU as a virtio disk.
 # No tarball; nothing uses it. 256M leaves room for Mesa and our own apps.
