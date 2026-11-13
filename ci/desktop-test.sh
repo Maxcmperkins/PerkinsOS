@@ -39,5 +39,23 @@ echo "ok: screenshot $SHOT ($RESULT)"
 COLOURS=${RESULT##*colours=}
 [ "$COLOURS" -ge 3 ] || fail "screen looks blank ($COLOURS colours)"
 
+# Keybindings only exist in our compositor, not in stock TinyWL.
+if grep -aq '^compositor=perkinsos' "$LOG"; then
+	# count NAME PROGRAM: print NAME=<number of PROGRAM processes>.
+	count() { send "sleep 2; echo $1=\$(pidof $2 | wc -w)"; wait_for "^$1="; }
+
+	count before foot
+	BEFORE=$(grep -a '^before=' "$LOG" | tr -dc 0-9)
+	press alt-ret
+	count opened foot
+	grep -aq "^opened=$((BEFORE + 1))" "$LOG" || fail "Alt+Enter did not open a terminal"
+	echo "ok: Alt+Enter opened a terminal"
+
+	press alt-q
+	count closed foot
+	grep -aq "^closed=$BEFORE" "$LOG" || fail "Alt+Q did not close the focused window"
+	echo "ok: Alt+Q closed the focused window"
+fi
+
 stop_vm
 echo "PASS"

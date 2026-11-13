@@ -46,6 +46,17 @@ send() {
 	echo "$1" >&3
 }
 
+# press KEYS: press a key combination on the VM's keyboard, as if typed in
+# the QEMU window. KEYS uses QEMU's names joined by dashes, e.g. alt-ret.
+press() {
+	python3 -c '
+import socket, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.sendall(("sendkey " + sys.argv[2] + "\n").encode())
+time.sleep(0.5)' "$MONITOR" "$1"
+}
+
 # login_root: log in at the prompt and wait for a shell.
 login_root() {
 	send root
