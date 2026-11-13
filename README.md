@@ -50,7 +50,7 @@ docs/         plan, architecture notes, screenshots
 ## Roadmap
 
 - [x] Week 1: boot a Buildroot image in QEMU
-- [ ] Week 2: graphics stack + stock TinyWL running
+- [x] Week 2: graphics stack + stock TinyWL running
 - [ ] Week 3: compositor made my own
 - [ ] Week 4: layer-shell protocol
 - [ ] Week 5: dock

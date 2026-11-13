@@ -2,6 +2,7 @@
 #   make image          build the kernel + root filesystem with Buildroot
 #   make run            boot them in QEMU (quit with Ctrl-A then X)
 #   make test           boot headless and check we can log in
+#   make test-desktop   start the compositor headless and screenshot it
 #   make menuconfig     change the image config interactively
 #   make savedefconfig  write the changed config back into the repo
 #   make clean          delete build output (keeps downloads)
@@ -33,7 +34,7 @@ BR_MAKE := $(MAKE) -C $(BUILDROOT_DIR) O=$(OUTPUT) \
 # Use KVM (hardware virtualisation) when we're allowed to; it's far faster.
 KVM := $(shell [ -r /dev/kvm ] && [ -w /dev/kvm ] && echo yes)
 
-.PHONY: image run test menuconfig savedefconfig clean
+.PHONY: image run test test-desktop menuconfig savedefconfig clean
 
 image: $(OUTPUT)/.config
 	$(BR_MAKE)
@@ -56,25 +57,39 @@ $(BUILDROOT_DIR)/Makefile: $(BUILDROOT_TARBALL)
 $(OUTPUT)/.config: $(DEFCONFIG) $(BUILDROOT_DIR)/Makefile
 	$(BR_MAKE) perkinsos_defconfig
 
+# Where the VM's screen goes: a GTK window if this terminal has a desktop
+# (WSLg sets DISPLAY), otherwise nowhere. Override with QEMU_DISPLAY=none.
+QEMU_DISPLAY ?= $(if $(DISPLAY)$(WAYLAND_DISPLAY),gtk,none)
+# Extra QEMU arguments, e.g. a monitor socket for the CI test.
+QEMU_EXTRA ?=
+
 # Boot the image:
-#   -kernel/-append  hand the kernel straight to QEMU: no bootloader needed
-#   root=/dev/vda    the ext4 image, attached as the first virtio disk
-#   console=ttyS0    kernel messages and the login prompt go to the serial port
-#   -nographic       ...and the serial port is this terminal (no window yet)
+#   -kernel/-append     hand the kernel straight to QEMU: no bootloader needed
+#   root=/dev/vda       the ext4 image, attached as the first virtio disk
+#   console=ttyS0       kernel messages and the login prompt go to the serial port
+#   -serial mon:stdio   ...and the serial port is this terminal
+#   virtio-vga          the virtio-gpu graphics card the compositor draws to
+#   virtio-keyboard/-tablet  input devices; a tablet reports absolute
+#                       positions, so the pointer isn't captured by the window
 run:
 	@[ -f $(IMAGES)/bzImage ] || { echo "No image yet. Run 'make image' first."; exit 1; }
 	@[ -n "$(KVM)" ] || echo "WARNING: no access to /dev/kvm, using slow software emulation."
-	qemu-system-x86_64 -M pc -m 512 -smp 2 \
+	qemu-system-x86_64 -M pc -m 1024 -smp 2 \
 		$(if $(KVM),-enable-kvm -cpu host) \
 		-kernel $(IMAGES)/bzImage \
 		-append "root=/dev/vda rw console=ttyS0" \
 		-drive file=$(IMAGES)/rootfs.ext4,if=virtio,format=raw \
 		-netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
-		-nographic
+		-device virtio-vga -device virtio-keyboard-pci -device virtio-tablet-pci \
+		-display $(QEMU_DISPLAY) -serial mon:stdio $(QEMU_EXTRA)
 
 # Boot headless, log in over the serial console, power off. See the script.
 test:
 	bash ci/boot-test.sh
+
+# Start the compositor headless and screenshot it to output/desktop-test.png.
+test-desktop:
+	bash ci/desktop-test.sh
 
 menuconfig: $(OUTPUT)/.config
 	$(BR_MAKE) menuconfig
