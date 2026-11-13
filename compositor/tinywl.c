@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <getopt.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -25,6 +26,17 @@
 #include <wlr/util/log.h>
 #include <xkbcommon/xkbcommon.h>
 
+/*
+ * PerkinsOS compositor. Forked from TinyWL (wlroots 0.19.2); everything
+ * marked "PerkinsOS:" is a change from the stock file.
+ */
+
+/* PerkinsOS: look and feel. Colours are RGBA, each channel 0.0 to 1.0. */
+#define BORDER_WIDTH 2
+static const float wallpaper_color[4] = {0.09f, 0.13f, 0.20f, 1.0f};
+static const float border_focused[4] = {0.30f, 0.65f, 1.00f, 1.0f};
+static const float border_unfocused[4] = {0.27f, 0.30f, 0.36f, 1.0f};
+
 /* For brevity's sake, struct members are annotated where they are used. */
 enum tinywl_cursor_mode {
 	TINYWL_CURSOR_PASSTHROUGH,
@@ -39,6 +51,12 @@ struct tinywl_server {
 	struct wlr_allocator *allocator;
 	struct wlr_scene *scene;
 	struct wlr_scene_output_layout *scene_layout;
+
+	/* PerkinsOS: the scene is split into trees, created back to front. A
+	 * scene tree draws its children in order, so anything in wallpaper_tree
+	 * is always behind anything in window_tree. */
+	struct wlr_scene_tree *wallpaper_tree;
+	struct wlr_scene_tree *window_tree;
 
 	struct wlr_xdg_shell *xdg_shell;
 	struct wl_listener new_xdg_toplevel;
@@ -73,6 +91,8 @@ struct tinywl_output {
 	struct wl_list link;
 	struct tinywl_server *server;
 	struct wlr_output *wlr_output;
+	/* PerkinsOS: a filled rectangle the size of this screen. */
+	struct wlr_scene_rect *wallpaper;
 	struct wl_listener frame;
 	struct wl_listener request_state;
 	struct wl_listener destroy;
@@ -83,6 +103,9 @@ struct tinywl_toplevel {
 	struct tinywl_server *server;
 	struct wlr_xdg_toplevel *xdg_toplevel;
 	struct wlr_scene_tree *scene_tree;
+	/* PerkinsOS: four thin rectangles around the window: top, bottom,
+	 * left, right. They are children of scene_tree, so they move with it. */
+	struct wlr_scene_rect *border[4];
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
@@ -108,6 +131,54 @@ struct tinywl_keyboard {
 	struct wl_listener key;
 	struct wl_listener destroy;
 };
+
+/* PerkinsOS: run a shell command as a separate program. */
+static void spawn(const char *command) {
+	/* fork() duplicates this process. It returns 0 in the copy (the child)
+	 * and the child's PID in the original. Only the child goes on to exec,
+	 * which replaces it with /bin/sh running the command. The compositor
+	 * itself carries straight on. */
+	if (fork() == 0) {
+		/* Detach from the compositor's session so the program isn't tied
+		 * to it for signals. */
+		setsid();
+		execl("/bin/sh", "/bin/sh", "-c", command, (void *)NULL);
+		/* Only reached if exec failed. Never fall back into compositor
+		 * code in the child. */
+		_exit(1);
+	}
+}
+
+/* PerkinsOS: paint all four border rectangles of a window one colour. */
+static void toplevel_set_border_color(struct tinywl_toplevel *toplevel,
+		const float color[static 4]) {
+	for (int i = 0; i < 4; i++) {
+		wlr_scene_rect_set_color(toplevel->border[i], color);
+	}
+}
+
+/* PerkinsOS: resize and reposition the border to hug the window. */
+static void toplevel_update_borders(struct tinywl_toplevel *toplevel) {
+	/* "Geometry" is the visible part of the window. We only need its size:
+	 * wlr_scene_xdg_surface_create() already shifts the surface so that the
+	 * geometry's top-left corner sits at 0,0 of scene_tree. Positions below
+	 * are therefore relative to the window's visible corner. */
+	struct wlr_box *geo = &toplevel->xdg_toplevel->base->geometry;
+	if (geo->width <= 0 || geo->height <= 0) {
+		return; /* no size yet: the client hasn't drawn anything */
+	}
+	const int bw = BORDER_WIDTH;
+	/* top and bottom span the full width including the corners */
+	wlr_scene_rect_set_size(toplevel->border[0], geo->width + 2 * bw, bw);
+	wlr_scene_node_set_position(&toplevel->border[0]->node, -bw, -bw);
+	wlr_scene_rect_set_size(toplevel->border[1], geo->width + 2 * bw, bw);
+	wlr_scene_node_set_position(&toplevel->border[1]->node, -bw, geo->height);
+	/* left and right fill the gap between them */
+	wlr_scene_rect_set_size(toplevel->border[2], bw, geo->height);
+	wlr_scene_node_set_position(&toplevel->border[2]->node, -bw, 0);
+	wlr_scene_rect_set_size(toplevel->border[3], bw, geo->height);
+	wlr_scene_node_set_position(&toplevel->border[3]->node, geo->width, 0);
+}
 
 static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 	/* Note: this function only deals with keyboard focus. */
@@ -141,6 +212,12 @@ static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 	wl_list_insert(&server->toplevels, &toplevel->link);
 	/* Activate the new surface */
 	wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
+	/* PerkinsOS: highlight the focused window's border, dim the rest. */
+	struct tinywl_toplevel *other;
+	wl_list_for_each(other, &server->toplevels, link) {
+		toplevel_set_border_color(other,
+			other == toplevel ? border_focused : border_unfocused);
+	}
 	/*
 	 * Tell the seat to have the keyboard enter this surface. wlroots will keep
 	 * track of this and automatically send key events to the appropriate
@@ -190,6 +267,21 @@ static bool handle_keybinding(struct tinywl_server *server, xkb_keysym_t sym) {
 		struct tinywl_toplevel *next_toplevel =
 			wl_container_of(server->toplevels.prev, next_toplevel, link);
 		focus_toplevel(next_toplevel);
+		break;
+	case XKB_KEY_Return:
+		/* PerkinsOS: Alt+Enter opens a terminal. */
+		spawn("foot");
+		break;
+	case XKB_KEY_q:
+		/* PerkinsOS: Alt+Q asks the focused window to close. The list is
+		 * kept in focus order, so the first entry is the focused one. This
+		 * is a polite request (xdg_toplevel.close); the client decides
+		 * how to shut down. */
+		if (!wl_list_empty(&server->toplevels)) {
+			struct tinywl_toplevel *focused =
+				wl_container_of(server->toplevels.next, focused, link);
+			wlr_xdg_toplevel_send_close(focused->xdg_toplevel);
+		}
 		break;
 	default:
 		return false;
@@ -369,7 +461,12 @@ static struct tinywl_toplevel *desktop_toplevel_at(
 	while (tree != NULL && tree->node.data == NULL) {
 		tree = tree->node.parent;
 	}
-	return tree->node.data;
+	/* PerkinsOS: stock TinyWL assumes every surface belongs to a toplevel.
+	 * That stops being true once other kinds of surface exist (the dock),
+	 * so a surface with no toplevel above it is reported as "no toplevel"
+	 * instead of dereferencing NULL. *surface is still set, so the caller
+	 * can send it pointer events. */
+	return tree != NULL ? tree->node.data : NULL;
 }
 
 static void reset_cursor_mode(struct tinywl_server *server) {
@@ -590,6 +687,8 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->request_state.link);
 	wl_list_remove(&output->destroy.link);
 	wl_list_remove(&output->link);
+	/* PerkinsOS: the wallpaper rectangle goes with its screen. */
+	wlr_scene_node_destroy(&output->wallpaper->node);
 	free(output);
 }
 
@@ -642,6 +741,14 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 
 	wl_list_insert(&server->outputs, &output->link);
 
+	/* PerkinsOS: wallpaper. One filled rectangle covering this screen, in
+	 * the tree that sits behind all windows. The size is the resolution we
+	 * just committed above. */
+	int width, height;
+	wlr_output_effective_resolution(wlr_output, &width, &height);
+	output->wallpaper = wlr_scene_rect_create(server->wallpaper_tree,
+		width, height, wallpaper_color);
+
 	/* Adds this to the output layout. The add_auto function arranges outputs
 	 * from left-to-right in the order they appear. A more sophisticated
 	 * compositor would let the user configure the arrangement of outputs in the
@@ -655,11 +762,22 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 		wlr_output);
 	struct wlr_scene_output *scene_output = wlr_scene_output_create(server->scene, wlr_output);
 	wlr_scene_output_layout_add_output(server->scene_layout, l_output, scene_output);
+
+	/* PerkinsOS: put the wallpaper where the layout placed this screen. */
+	wlr_scene_node_set_position(&output->wallpaper->node,
+		l_output->x, l_output->y);
 }
 
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 	/* Called when the surface is mapped, or ready to display on-screen. */
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, map);
+
+	/* PerkinsOS: stock TinyWL opens every window at 0,0, exactly on top of
+	 * the last one. Step each new window down and right so they cascade. */
+	int n = wl_list_length(&toplevel->server->toplevels) % 8;
+	wlr_scene_node_set_position(&toplevel->scene_tree->node,
+		40 + 32 * n, 40 + 32 * n);
+	toplevel_update_borders(toplevel);
 
 	wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
 
@@ -676,6 +794,16 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 	}
 
 	wl_list_remove(&toplevel->link);
+
+	/* PerkinsOS: stock TinyWL leaves nothing focused when the focused
+	 * window closes, so typing goes nowhere until you click. Hand focus
+	 * to the most recently used window that is left. */
+	struct tinywl_server *server = toplevel->server;
+	if (!wl_list_empty(&server->toplevels)) {
+		struct tinywl_toplevel *next =
+			wl_container_of(server->toplevels.next, next, link);
+		focus_toplevel(next);
+	}
 }
 
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
@@ -688,7 +816,12 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 		 * configures the xdg_toplevel with 0,0 size to let the client pick the
 		 * dimensions itself. */
 		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+		return;
 	}
+
+	/* PerkinsOS: a commit is the moment a client's new state (including a
+	 * new size) takes effect, so it is the right time to refit the border. */
+	toplevel_update_borders(toplevel);
 }
 
 static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
@@ -797,9 +930,16 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	toplevel->server = server;
 	toplevel->xdg_toplevel = xdg_toplevel;
 	toplevel->scene_tree =
-		wlr_scene_xdg_surface_create(&toplevel->server->scene->tree, xdg_toplevel->base);
+		wlr_scene_xdg_surface_create(toplevel->server->window_tree, xdg_toplevel->base);
 	toplevel->scene_tree->node.data = toplevel;
 	xdg_toplevel->base->data = toplevel->scene_tree;
+
+	/* PerkinsOS: create the border rectangles. They start with no size;
+	 * toplevel_update_borders() fits them once the window has one. */
+	for (int i = 0; i < 4; i++) {
+		toplevel->border[i] = wlr_scene_rect_create(toplevel->scene_tree,
+			0, 0, border_unfocused);
+	}
 
 	/* Listen to the various events it can emit */
 	toplevel->map.notify = xdg_toplevel_map;
@@ -891,6 +1031,11 @@ int main(int argc, char *argv[]) {
 		return 0;
 	}
 
+	/* PerkinsOS: we start programs with fork() and never wait() for them.
+	 * Ignoring SIGCHLD tells the kernel to clean up finished children
+	 * itself, so they don't pile up as zombie processes. */
+	signal(SIGCHLD, SIG_IGN);
+
 	struct tinywl_server server = {0};
 	/* The Wayland display is managed by libwayland. It handles accepting
 	 * clients from the Unix socket, manging Wayland globals, and so on. */
@@ -957,6 +1102,10 @@ int main(int argc, char *argv[]) {
 	 */
 	server.scene = wlr_scene_create();
 	server.scene_layout = wlr_scene_attach_output_layout(server.scene, server.output_layout);
+
+	/* PerkinsOS: the scene's layers, back to front (see struct). */
+	server.wallpaper_tree = wlr_scene_tree_create(&server.scene->tree);
+	server.window_tree = wlr_scene_tree_create(&server.scene->tree);
 
 	/* Set up xdg-shell version 3. The xdg-shell is a Wayland protocol which is
 	 * used for application windows. For more detail on shells, refer to
