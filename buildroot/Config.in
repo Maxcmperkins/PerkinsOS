@@ -1,3 +1,4 @@
-# Menu entries for our own packages show up in `make menuconfig` under
-# "External options". Empty for now; the compositor is added here in week 2:
-#   source "$BR2_EXTERNAL_PERKINSOS_PATH/package/perkinsos-compositor/Config.in"
+# Menu entries for our own packages. They show up in `make menuconfig`
+# under "External options".
+source "$BR2_EXTERNAL_PERKINSOS_PATH/package/tinywl/Config.in"
+source "$BR2_EXTERNAL_PERKINSOS_PATH/package/perkinsos-compositor/Config.in"

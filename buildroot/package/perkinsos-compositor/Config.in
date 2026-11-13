@@ -1,0 +1,10 @@
+config BR2_PACKAGE_PERKINSOS_COMPOSITOR
+	bool "perkinsos-compositor"
+	depends on BR2_PACKAGE_WLROOTS
+	help
+	  The PerkinsOS Wayland compositor, built from the compositor/
+	  folder at the top of this repository. Installed as
+	  /usr/bin/perkinsos-compositor.
+
+comment "perkinsos-compositor needs wlroots"
+	depends on !BR2_PACKAGE_WLROOTS

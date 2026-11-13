@@ -23,6 +23,9 @@ BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
 # Root has an empty password: this is a dev VM, and CI must log in unattended.
 BR2_TARGET_GENERIC_HOSTNAME="perkinsos"
 BR2_TARGET_GENERIC_ISSUE="Welcome to PerkinsOS"
+# Generate one UTF-8 locale. Without any, programs only get the plain "C"
+# locale and the foot terminal refuses to start. LANG is set in the overlay.
+BR2_GENERATE_LOCALE="en_US.UTF-8"
 # Bring up the virtio network card with DHCP (QEMU's user-mode network).
 BR2_SYSTEM_DHCP="eth0"
 
@@ -35,8 +38,36 @@ BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y
 BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="board/qemu/x86_64/linux.config"
 BR2_LINUX_KERNEL_NEEDS_HOST_LIBELF=y
 
+# /dev is managed by eudev rather than the kernel's bare devtmpfs.
+# libinput and wlroots find keyboards, mice and GPUs through udev.
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
+
+# Our own files copied over the root filesystem (see buildroot/overlay/).
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_PERKINSOS_PATH)/overlay"
+
+# Mesa: provides EGL, OpenGL ES and GBM, which Buildroot's wlroots package
+# requires. virgl is the driver for QEMU's virtio-gpu and needs no LLVM,
+# which keeps the build short. Selecting it turns on EGL and GBM.
+BR2_PACKAGE_MESA3D=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_VIRGL=y
+BR2_PACKAGE_MESA3D_OPENGL_ES=y
+
+# wlroots 0.19.2 (pinned by the Buildroot release). Pulls in libinput,
+# libdrm, libxkbcommon, pixman, seatd and wayland.
+BR2_PACKAGE_WLROOTS=y
+# Keyboard layout data; libxkbcommon can't build a keymap without it.
+BR2_PACKAGE_XKEYBOARD_CONFIG=y
+
+# Stock TinyWL from the same wlroots tarball (buildroot/package/tinywl/).
+BR2_PACKAGE_TINYWL=y
+
+# A Wayland terminal to have something to open, and a font for it.
+BR2_PACKAGE_FOOT=y
+BR2_PACKAGE_DEJAVU=y
+
 # Root filesystem: one ext4 image, attached to QEMU as a virtio disk.
-# No tarball; nothing uses it.
+# No tarball; nothing uses it. 256M leaves room for Mesa and our own apps.
 BR2_TARGET_ROOTFS_EXT2=y
 BR2_TARGET_ROOTFS_EXT2_4=y
+BR2_TARGET_ROOTFS_EXT2_SIZE="256M"
 # BR2_TARGET_ROOTFS_TAR is not set

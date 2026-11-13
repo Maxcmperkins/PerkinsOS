@@ -1,0 +1,4 @@
+# Same tarball and hash as Buildroot's package/wlroots/wlroots.hash
+sha256  09a0a8d60104c8b0772fee4f60ba76a89aed7e59dff7659d00960fba06bdf267  wlroots-0.19.2.tar.gz
+# Locally computed
+sha256  9ae58252b35106323701066c033a6b86023f59732a9c52a2d882a0777ffe55a5  tinywl/LICENSE

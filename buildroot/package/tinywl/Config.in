@@ -1,0 +1,13 @@
+config BR2_PACKAGE_TINYWL
+	bool "tinywl"
+	depends on BR2_PACKAGE_WLROOTS
+	help
+	  TinyWL, the ~1000-line reference compositor that ships inside
+	  the wlroots source tree. Built unmodified, from the same
+	  wlroots version as the library, as the starting point for the
+	  PerkinsOS compositor.
+
+	  https://gitlab.freedesktop.org/wlroots/wlroots/-/tree/master/tinywl
+
+comment "tinywl needs wlroots"
+	depends on !BR2_PACKAGE_WLROOTS
