@@ -16,12 +16,21 @@ xdg-shell-protocol.h:
 	$(WAYLAND_SCANNER) server-header \
 		$(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml $@
 
-tinywl.o: tinywl.c xdg-shell-protocol.h
+# PerkinsOS: the layer-shell protocol is not part of wayland-protocols. Its
+# XML ships in the wlroots source; the build passes that folder in as
+# WLR_PROTOCOLS (see buildroot/package/perkinsos-compositor). wlroots'
+# wlr_layer_shell_v1.h includes this generated header.
+wlr-layer-shell-unstable-v1-protocol.h:
+	$(WAYLAND_SCANNER) server-header \
+		$(WLR_PROTOCOLS)/wlr-layer-shell-unstable-v1.xml $@
+
+tinywl.o: tinywl.c xdg-shell-protocol.h wlr-layer-shell-unstable-v1-protocol.h
 	$(CC) -c $< -g -Werror $(CFLAGS) -I. -DWLR_USE_UNSTABLE -o $@
 tinywl: tinywl.o
 	$(CC) $^ $> -g -Werror $(CFLAGS) $(LDFLAGS) $(LIBS) -o $@
 
 clean:
-	rm -f tinywl tinywl.o xdg-shell-protocol.h
+	rm -f tinywl tinywl.o xdg-shell-protocol.h \
+		wlr-layer-shell-unstable-v1-protocol.h
 
 .PHONY: all clean

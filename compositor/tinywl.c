@@ -15,6 +15,7 @@
 #include <wlr/types/wlr_data_device.h>
 #include <wlr/types/wlr_input_device.h>
 #include <wlr/types/wlr_keyboard.h>
+#include <wlr/types/wlr_layer_shell_v1.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer.h>
@@ -54,9 +55,21 @@ struct tinywl_server {
 
 	/* PerkinsOS: the scene is split into trees, created back to front. A
 	 * scene tree draws its children in order, so anything in wallpaper_tree
-	 * is always behind anything in window_tree. */
+	 * is always behind anything in window_tree.
+	 *
+	 * layer_trees holds the four layers of the layer-shell protocol,
+	 * indexed by the protocol's own numbers: background (0), bottom (1),
+	 * top (2), overlay (3). Front to back the whole stack is:
+	 *   overlay, top, windows, bottom, background, wallpaper */
 	struct wlr_scene_tree *wallpaper_tree;
 	struct wlr_scene_tree *window_tree;
+	struct wlr_scene_tree *layer_trees[4];
+
+	/* PerkinsOS: layer-shell, the protocol docks and launchers use. */
+	struct wlr_layer_shell_v1 *layer_shell;
+	struct wl_listener new_layer_surface;
+	/* The layer surface that currently holds the keyboard, if any. */
+	struct tinywl_layer_surface *focused_layer;
 
 	struct wlr_xdg_shell *xdg_shell;
 	struct wl_listener new_xdg_toplevel;
@@ -93,6 +106,11 @@ struct tinywl_output {
 	struct wlr_output *wlr_output;
 	/* PerkinsOS: a filled rectangle the size of this screen. */
 	struct wlr_scene_rect *wallpaper;
+	/* PerkinsOS: the layer surfaces shown on this screen, and the part of
+	 * the screen left over for windows once docks and panels have claimed
+	 * their edges. */
+	struct wl_list layer_surfaces; /* tinywl_layer_surface.link */
+	struct wlr_box usable_area;
 	struct wl_listener frame;
 	struct wl_listener request_state;
 	struct wl_listener destroy;
@@ -106,6 +124,9 @@ struct tinywl_toplevel {
 	/* PerkinsOS: four thin rectangles around the window: top, bottom,
 	 * left, right. They are children of scene_tree, so they move with it. */
 	struct wlr_scene_rect *border[4];
+	/* PerkinsOS: maximize state, and where to put the window back. */
+	bool maximized;
+	struct wlr_box restore;
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
@@ -114,6 +135,20 @@ struct tinywl_toplevel {
 	struct wl_listener request_resize;
 	struct wl_listener request_maximize;
 	struct wl_listener request_fullscreen;
+};
+
+/* PerkinsOS: our state for one layer surface (a dock, a launcher...). */
+struct tinywl_layer_surface {
+	struct wl_list link; /* tinywl_output.layer_surfaces */
+	struct tinywl_server *server;
+	struct tinywl_output *output;
+	struct wlr_layer_surface_v1 *layer_surface;
+	/* wlroots helper that owns the scene node and does the anchor maths */
+	struct wlr_scene_layer_surface_v1 *scene;
+	struct wl_listener map;
+	struct wl_listener unmap;
+	struct wl_listener commit;
+	struct wl_listener destroy;
 };
 
 struct tinywl_popup {
@@ -223,7 +258,10 @@ static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 	 * track of this and automatically send key events to the appropriate
 	 * clients without additional work on your part.
 	 */
-	if (keyboard != NULL) {
+	/* PerkinsOS: while a layer surface (the launcher) holds the keyboard,
+	 * the window is still raised and marked active but typing keeps going
+	 * to the layer surface. Focus comes back in layer_surface_unmap(). */
+	if (keyboard != NULL && server->focused_layer == NULL) {
 		wlr_seat_keyboard_notify_enter(seat, surface,
 			keyboard->keycodes, keyboard->num_keycodes, &keyboard->modifiers);
 	}
@@ -683,6 +721,13 @@ static void output_request_state(struct wl_listener *listener, void *data) {
 static void output_destroy(struct wl_listener *listener, void *data) {
 	struct tinywl_output *output = wl_container_of(listener, output, destroy);
 
+	/* PerkinsOS: a layer surface cannot outlive its screen. Destroying one
+	 * runs layer_surface_destroy(), which unlinks it, hence the _safe loop. */
+	struct tinywl_layer_surface *l, *tmp;
+	wl_list_for_each_safe(l, tmp, &output->layer_surfaces, link) {
+		wlr_layer_surface_v1_destroy(l->layer_surface);
+	}
+
 	wl_list_remove(&output->frame.link);
 	wl_list_remove(&output->request_state.link);
 	wl_list_remove(&output->destroy.link);
@@ -690,6 +735,175 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	/* PerkinsOS: the wallpaper rectangle goes with its screen. */
 	wlr_scene_node_destroy(&output->wallpaper->node);
 	free(output);
+}
+
+/*
+ * PerkinsOS: layer-shell.
+ *
+ * A layer surface is a client surface that asks to be pinned to the screen
+ * instead of being an ordinary window: "bottom edge, full width, 48 pixels
+ * high, and keep windows off me". The client states what it wants (layer,
+ * anchor, size, exclusive zone); the compositor decides the actual position
+ * and size and tells the client with a configure event; the client then
+ * draws a buffer of exactly that size.
+ */
+
+/* Work out where every layer surface on one screen goes, and what part of
+ * the screen is left over for windows. */
+static void arrange_layers(struct tinywl_output *output) {
+	struct tinywl_server *server = output->server;
+
+	/* full_area: the whole screen, in layout coordinates.
+	 * usable_area: starts as the whole screen and shrinks each time a
+	 * surface claims an edge with an exclusive zone. */
+	struct wlr_box full_area;
+	wlr_output_layout_get_box(server->output_layout, output->wlr_output,
+		&full_area);
+	struct wlr_box usable_area = full_area;
+
+	/* Two passes: surfaces that claim an edge go first, so that everything
+	 * else is laid out in the space that remains. */
+	for (int pass = 0; pass < 2; pass++) {
+		struct tinywl_layer_surface *l;
+		wl_list_for_each(l, &output->layer_surfaces, link) {
+			struct wlr_layer_surface_v1 *ls = l->layer_surface;
+			if (!ls->initialized) {
+				continue; /* the client hasn't done its first commit */
+			}
+			bool claims_edge = ls->current.exclusive_zone > 0;
+			if (claims_edge != (pass == 0)) {
+				continue;
+			}
+			/* This wlroots helper applies the anchor and margin rules,
+			 * positions the scene node, sends the configure event, and
+			 * subtracts the exclusive zone from usable_area. */
+			wlr_scene_layer_surface_v1_configure(l->scene,
+				&full_area, &usable_area);
+		}
+	}
+	output->usable_area = usable_area;
+}
+
+static void layer_surface_commit(struct wl_listener *listener, void *data) {
+	struct tinywl_layer_surface *l = wl_container_of(listener, l, commit);
+	struct wlr_layer_surface_v1 *ls = l->layer_surface;
+
+	/* Only rearrange when something that affects layout changed: the
+	 * first commit (the client is waiting for its configure), or a commit
+	 * that changed size, anchor, zone, margin or layer. arrange_layers()
+	 * sends configure events, and clients commit in reply, so rearranging
+	 * on every commit would loop forever. */
+	if (ls->initial_commit || ls->current.committed != 0) {
+		/* The client may have asked to move to a different layer. */
+		wlr_scene_node_reparent(&l->scene->tree->node,
+			l->server->layer_trees[ls->current.layer]);
+		arrange_layers(l->output);
+	}
+}
+
+static void layer_surface_map(struct wl_listener *listener, void *data) {
+	/* Mapped: the surface has a buffer and is now visible. */
+	struct tinywl_layer_surface *l = wl_container_of(listener, l, map);
+	struct tinywl_server *server = l->server;
+	struct wlr_layer_surface_v1 *ls = l->layer_surface;
+
+	/* An exclusive zone only counts once the surface is visible. */
+	arrange_layers(l->output);
+
+	/* A surface above the windows that asked for the keyboard gets it.
+	 * This is how the launcher receives typing while it is open. */
+	bool wants_keyboard = ls->current.keyboard_interactive !=
+		ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE;
+	bool above_windows = ls->current.layer >= ZWLR_LAYER_SHELL_V1_LAYER_TOP;
+	if (wants_keyboard && above_windows) {
+		server->focused_layer = l;
+		struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
+		if (keyboard != NULL) {
+			wlr_seat_keyboard_notify_enter(server->seat, ls->surface,
+				keyboard->keycodes, keyboard->num_keycodes,
+				&keyboard->modifiers);
+		}
+	}
+}
+
+static void layer_surface_unmap(struct wl_listener *listener, void *data) {
+	struct tinywl_layer_surface *l = wl_container_of(listener, l, unmap);
+	struct tinywl_server *server = l->server;
+
+	/* Give back any edge it had claimed. */
+	arrange_layers(l->output);
+
+	/* If it held the keyboard, hand the keyboard back to the window that
+	 * had it before (the list is in focus order, so that's the first). */
+	if (server->focused_layer == l) {
+		server->focused_layer = NULL;
+		wlr_seat_keyboard_notify_clear_focus(server->seat);
+		if (!wl_list_empty(&server->toplevels)) {
+			struct tinywl_toplevel *toplevel =
+				wl_container_of(server->toplevels.next, toplevel, link);
+			focus_toplevel(toplevel);
+		}
+	}
+}
+
+static void layer_surface_destroy(struct wl_listener *listener, void *data) {
+	/* The client destroyed the surface or disconnected. wlroots raises
+	 * unmap before this if it was visible, and removes the scene node. */
+	struct tinywl_layer_surface *l = wl_container_of(listener, l, destroy);
+
+	if (l->server->focused_layer == l) {
+		l->server->focused_layer = NULL;
+	}
+	wl_list_remove(&l->map.link);
+	wl_list_remove(&l->unmap.link);
+	wl_list_remove(&l->commit.link);
+	wl_list_remove(&l->destroy.link);
+	wl_list_remove(&l->link);
+	free(l);
+}
+
+static void server_new_layer_surface(struct wl_listener *listener, void *data) {
+	/* A client created a layer surface. */
+	struct tinywl_server *server =
+		wl_container_of(listener, server, new_layer_surface);
+	struct wlr_layer_surface_v1 *ls = data;
+
+	/* The client may name a screen or leave the choice to us. If it left
+	 * it to us, use the first screen. With no screen at all, refuse. */
+	if (ls->output == NULL) {
+		if (wl_list_empty(&server->outputs)) {
+			wlr_layer_surface_v1_destroy(ls);
+			return;
+		}
+		struct tinywl_output *first =
+			wl_container_of(server->outputs.next, first, link);
+		ls->output = first->wlr_output;
+	}
+
+	struct tinywl_layer_surface *l = calloc(1, sizeof(*l));
+	l->server = server;
+	l->layer_surface = ls;
+	/* wlr_output.data points back at our struct (set in server_new_output) */
+	l->output = ls->output->data;
+
+	/* Add it to the scene under the tree for the layer it asked for. Which
+	 * tree it is in is what decides whether it draws above or below windows.
+	 * "pending" because nothing is committed yet at creation time. */
+	l->scene = wlr_scene_layer_surface_v1_create(
+		server->layer_trees[ls->pending.layer], ls);
+	/* Popups opened by this surface look up their parent tree here. */
+	ls->data = l->scene->tree;
+
+	l->commit.notify = layer_surface_commit;
+	wl_signal_add(&ls->surface->events.commit, &l->commit);
+	l->map.notify = layer_surface_map;
+	wl_signal_add(&ls->surface->events.map, &l->map);
+	l->unmap.notify = layer_surface_unmap;
+	wl_signal_add(&ls->surface->events.unmap, &l->unmap);
+	l->destroy.notify = layer_surface_destroy;
+	wl_signal_add(&ls->events.destroy, &l->destroy);
+
+	wl_list_insert(&l->output->layer_surfaces, &l->link);
 }
 
 static void server_new_output(struct wl_listener *listener, void *data) {
@@ -726,6 +940,9 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	struct tinywl_output *output = calloc(1, sizeof(*output));
 	output->wlr_output = wlr_output;
 	output->server = server;
+	/* PerkinsOS: let code that only has the wlr_output find our struct. */
+	wlr_output->data = output;
+	wl_list_init(&output->layer_surfaces);
 
 	/* Sets up a listener for the frame event. */
 	output->frame.notify = output_frame;
@@ -766,6 +983,10 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	/* PerkinsOS: put the wallpaper where the layout placed this screen. */
 	wlr_scene_node_set_position(&output->wallpaper->node,
 		l_output->x, l_output->y);
+
+	/* PerkinsOS: no layer surfaces yet, so this just sets usable_area to
+	 * the whole screen. */
+	arrange_layers(output);
 }
 
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
@@ -905,9 +1126,45 @@ static void xdg_toplevel_request_maximize(
 	 * anything and let the client finish the initial surface setup. */
 	struct tinywl_toplevel *toplevel =
 		wl_container_of(listener, toplevel, request_maximize);
-	if (toplevel->xdg_toplevel->base->initialized) {
-		wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+	struct tinywl_server *server = toplevel->server;
+	struct wlr_xdg_toplevel *xdg_toplevel = toplevel->xdg_toplevel;
+	if (!xdg_toplevel->base->initialized) {
+		return;
 	}
+
+	/* PerkinsOS: stock TinyWL ignores maximize. We fill the usable area of
+	 * the first screen, which is the screen minus whatever the dock and
+	 * other layer surfaces have claimed. That is the reason usable_area
+	 * exists. "requested" is what the client just asked for. */
+	bool maximize = xdg_toplevel->requested.maximized;
+	if (maximize == toplevel->maximized || wl_list_empty(&server->outputs)) {
+		/* Nothing to change, but the protocol still requires a reply. */
+		wlr_xdg_surface_schedule_configure(xdg_toplevel->base);
+		return;
+	}
+	struct wlr_scene_node *node = &toplevel->scene_tree->node;
+	if (maximize) {
+		struct tinywl_output *output =
+			wl_container_of(server->outputs.next, output, link);
+		/* Remember where the window was so un-maximizing can put it back. */
+		toplevel->restore.x = node->x;
+		toplevel->restore.y = node->y;
+		toplevel->restore.width = xdg_toplevel->base->geometry.width;
+		toplevel->restore.height = xdg_toplevel->base->geometry.height;
+		wlr_scene_node_set_position(node,
+			output->usable_area.x, output->usable_area.y);
+		wlr_xdg_toplevel_set_size(xdg_toplevel,
+			output->usable_area.width, output->usable_area.height);
+	} else {
+		wlr_scene_node_set_position(node,
+			toplevel->restore.x, toplevel->restore.y);
+		wlr_xdg_toplevel_set_size(xdg_toplevel,
+			toplevel->restore.width, toplevel->restore.height);
+	}
+	/* Tell the client its new state so it can redraw to match (for
+	 * example, swap its maximize button for a restore button). */
+	wlr_xdg_toplevel_set_maximized(xdg_toplevel, maximize);
+	toplevel->maximized = maximize;
 }
 
 static void xdg_toplevel_request_fullscreen(
@@ -999,9 +1256,27 @@ static void server_new_xdg_popup(struct wl_listener *listener, void *data) {
 	 * provide the proper parent scene node of the xdg popup. To enable this,
 	 * we always set the user data field of xdg_surfaces to the corresponding
 	 * scene node. */
-	struct wlr_xdg_surface *parent = wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
-	assert(parent != NULL);
-	struct wlr_scene_tree *parent_tree = parent->data;
+	/* PerkinsOS: stock TinyWL asserts the parent is an xdg surface. A popup
+	 * can now also belong to a layer surface, and both kinds store their
+	 * scene tree in their data field. */
+	struct wlr_scene_tree *parent_tree = NULL;
+	if (xdg_popup->parent != NULL) {
+		struct wlr_xdg_surface *xdg_parent =
+			wlr_xdg_surface_try_from_wlr_surface(xdg_popup->parent);
+		struct wlr_layer_surface_v1 *layer_parent =
+			wlr_layer_surface_v1_try_from_wlr_surface(xdg_popup->parent);
+		if (xdg_parent != NULL) {
+			parent_tree = xdg_parent->data;
+		} else if (layer_parent != NULL) {
+			parent_tree = layer_parent->data;
+		}
+	}
+	if (parent_tree == NULL) {
+		/* No parent we know how to draw under: refuse the popup. */
+		wlr_xdg_popup_destroy(xdg_popup);
+		free(popup);
+		return;
+	}
 	xdg_popup->base->data = wlr_scene_xdg_surface_create(parent_tree, xdg_popup->base);
 
 	popup->commit.notify = xdg_popup_commit;
@@ -1105,7 +1380,15 @@ int main(int argc, char *argv[]) {
 
 	/* PerkinsOS: the scene's layers, back to front (see struct). */
 	server.wallpaper_tree = wlr_scene_tree_create(&server.scene->tree);
+	server.layer_trees[ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND] =
+		wlr_scene_tree_create(&server.scene->tree);
+	server.layer_trees[ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM] =
+		wlr_scene_tree_create(&server.scene->tree);
 	server.window_tree = wlr_scene_tree_create(&server.scene->tree);
+	server.layer_trees[ZWLR_LAYER_SHELL_V1_LAYER_TOP] =
+		wlr_scene_tree_create(&server.scene->tree);
+	server.layer_trees[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY] =
+		wlr_scene_tree_create(&server.scene->tree);
 
 	/* Set up xdg-shell version 3. The xdg-shell is a Wayland protocol which is
 	 * used for application windows. For more detail on shells, refer to
@@ -1117,6 +1400,14 @@ int main(int argc, char *argv[]) {
 	wl_signal_add(&server.xdg_shell->events.new_toplevel, &server.new_xdg_toplevel);
 	server.new_xdg_popup.notify = server_new_xdg_popup;
 	wl_signal_add(&server.xdg_shell->events.new_popup, &server.new_xdg_popup);
+
+	/* PerkinsOS: advertise layer-shell (version 4) to clients. From here
+	 * on `wayland-info` lists zwlr_layer_shell_v1, and a client that binds
+	 * it and creates a surface lands in server_new_layer_surface(). */
+	server.layer_shell = wlr_layer_shell_v1_create(server.wl_display, 4);
+	server.new_layer_surface.notify = server_new_layer_surface;
+	wl_signal_add(&server.layer_shell->events.new_surface,
+		&server.new_layer_surface);
 
 	/*
 	 * Creates a cursor, which is a wlroots utility for tracking the cursor
@@ -1209,6 +1500,7 @@ int main(int argc, char *argv[]) {
 
 	wl_list_remove(&server.new_xdg_toplevel.link);
 	wl_list_remove(&server.new_xdg_popup.link);
+	wl_list_remove(&server.new_layer_surface.link);
 
 	wl_list_remove(&server.cursor_motion.link);
 	wl_list_remove(&server.cursor_motion_absolute.link);
