@@ -61,6 +61,12 @@ BR2_PACKAGE_XKEYBOARD_CONFIG=y
 # Stock TinyWL from the same wlroots tarball (buildroot/package/tinywl/).
 BR2_PACKAGE_TINYWL=y
 
+# Our own code, built from compositor/ and shell/ at the top of the repo
+# (buildroot/package/perkinsos-*). Both build nothing while those folders
+# hold only a README. The shell package also pulls in cairo for drawing.
+BR2_PACKAGE_PERKINSOS_COMPOSITOR=y
+BR2_PACKAGE_PERKINSOS_SHELL=y
+
 # A Wayland terminal to have something to open, and a font for it.
 BR2_PACKAGE_FOOT=y
 BR2_PACKAGE_DEJAVU=y

@@ -2,7 +2,10 @@
 #   make image          build the kernel + root filesystem with Buildroot
 #   make run            boot them in QEMU (quit with Ctrl-A then X)
 #   make test           boot headless and check we can log in
-#   make test-desktop   start the compositor headless and screenshot it
+#   make test-desktop   boot headless and screenshot the desktop
+#   make compositor     rebuild only compositor/ and repack the image (fast)
+#   make shell          rebuild only shell/ and repack the image (fast)
+#   make fork-tinywl    one-off: copy stock TinyWL into compositor/
 #   make menuconfig     change the image config interactively
 #   make savedefconfig  write the changed config back into the repo
 #   make clean          delete build output (keeps downloads)
@@ -34,7 +37,7 @@ BR_MAKE := $(MAKE) -C $(BUILDROOT_DIR) O=$(OUTPUT) \
 # Use KVM (hardware virtualisation) when we're allowed to; it's far faster.
 KVM := $(shell [ -r /dev/kvm ] && [ -w /dev/kvm ] && echo yes)
 
-.PHONY: image run test test-desktop menuconfig savedefconfig clean
+.PHONY: image run test test-desktop compositor shell fork-tinywl menuconfig savedefconfig clean
 
 image: $(OUTPUT)/.config
 	$(BR_MAKE)
@@ -90,6 +93,27 @@ test:
 # Start the compositor headless and screenshot it to output/desktop-test.png.
 test-desktop:
 	bash ci/desktop-test.sh
+
+# Fast edit loop: rebuild only our own package, then repack the image.
+# Takes seconds, not minutes. `-rebuild` makes Buildroot copy the folder
+# again and recompile it; `all` regenerates rootfs.ext4.
+compositor: $(OUTPUT)/.config
+	$(BR_MAKE) perkinsos-compositor-rebuild all
+
+shell: $(OUTPUT)/.config
+	$(BR_MAKE) perkinsos-shell-rebuild all
+
+# One-off, week 3: start compositor/ as an exact copy of stock TinyWL, taken
+# from the wlroots tarball Buildroot already downloaded (so it matches the
+# pinned wlroots version). Refuses to overwrite an existing fork.
+WLROOTS_TARBALL = $(firstword $(wildcard dl/wlroots/wlroots-*.tar.gz))
+fork-tinywl:
+	@[ ! -e compositor/tinywl.c ] || { echo "compositor/tinywl.c already exists."; exit 1; }
+	@[ -n "$(WLROOTS_TARBALL)" ] || { echo "No wlroots tarball in dl/. Run 'make image' first."; exit 1; }
+	tar -xzf $(WLROOTS_TARBALL) -C compositor --strip-components=2 --wildcards \
+		'wlroots-*/tinywl/tinywl.c' 'wlroots-*/tinywl/Makefile' 'wlroots-*/tinywl/LICENSE'
+	@echo "Forked TinyWL from $(WLROOTS_TARBALL) into compositor/."
+	@echo "Next: git add compositor && git commit, then 'make compositor && make run'."
 
 menuconfig: $(OUTPUT)/.config
 	$(BR_MAKE) menuconfig

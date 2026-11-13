@@ -2,3 +2,4 @@
 # under "External options".
 source "$BR2_EXTERNAL_PERKINSOS_PATH/package/tinywl/Config.in"
 source "$BR2_EXTERNAL_PERKINSOS_PATH/package/perkinsos-compositor/Config.in"
+source "$BR2_EXTERNAL_PERKINSOS_PATH/package/perkinsos-shell/Config.in"
