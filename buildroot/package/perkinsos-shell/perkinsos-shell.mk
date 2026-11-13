@@ -15,6 +15,8 @@ PERKINSOS_SHELL_DEPENDENCIES = host-pkgconf host-wayland wayland \
 # The rule: every folder shell/NAME/ that contains .c files is compiled
 # into one program, /usr/bin/perkinsos-NAME. All .c files in the folder are
 # compiled together. There is no Makefile to maintain inside shell/.
+# The one exception is shell/common/: it is not a program. Its .c files are
+# compiled into every program, and its headers are on the include path.
 
 # Wayland protocols the clients may use. wayland-scanner turns each XML file
 # into a C header (the functions a client calls) and a C file (the message
@@ -43,12 +45,14 @@ define PERKINSOS_SHELL_BUILD_CMDS
 	for dir in $(@D)/*/; do \
 		name=$$(basename $$dir); \
 		[ "$$name" != protocol ] || continue; \
+		[ "$$name" != common ] || continue; \
 		ls $$dir*.c > /dev/null 2>&1 || continue; \
 		echo "  CC      perkinsos-$$name"; \
-		$(TARGET_MAKE_ENV) $(TARGET_CC) $(TARGET_CFLAGS) -Wall -g \
-			-I$(@D)/protocol \
+		$(TARGET_MAKE_ENV) $(TARGET_CC) $(TARGET_CFLAGS) -Wall -Werror -g \
+			-I$(@D)/protocol -I$(@D)/common \
 			$$($(PKG_CONFIG_HOST_BINARY) --cflags $(PERKINSOS_SHELL_PKGS)) \
-			$$dir*.c $(@D)/protocol/*.c \
+			$$dir*.c $$(ls $(@D)/common/*.c 2> /dev/null) \
+			$(@D)/protocol/*.c \
 			-o $(@D)/perkinsos-$$name \
 			$(TARGET_LDFLAGS) \
 			$$($(PKG_CONFIG_HOST_BINARY) --libs $(PERKINSOS_SHELL_PKGS)) \

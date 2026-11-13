@@ -56,8 +56,8 @@ docs/         plan, setup, architecture, week-by-week guides
 - [x] Week 1: boot a Buildroot image in QEMU
 - [x] Week 2: graphics stack + stock TinyWL running
 - [x] Week 3: compositor made my own
-- [ ] Week 4: layer-shell protocol
-- [ ] Week 5: dock
+- [x] Week 4: layer-shell protocol
+- [x] Week 5: dock
 - [ ] Week 6: launcher + first app
 - [ ] Week 7: boot to desktop + CI
 - [ ] Week 8: polish + write-up
