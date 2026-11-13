@@ -1,0 +1,16 @@
+#!/bin/sh
+# What appears on the desktop. The compositor runs this once it is ready
+# (it is the -s argument in /etc/init.d/S99desktop), with WAYLAND_DISPLAY set
+# so that clients started here know which compositor to connect to.
+
+# Start each shell component that exists in the image.
+started=no
+for client in perkinsos-dock perkinsos-launcher; do
+	if command -v "$client" > /dev/null; then
+		"$client" &
+		started=yes
+	fi
+done
+
+# Until the dock and launcher exist, open a terminal so the screen isn't empty.
+[ "$started" = yes ] || foot &

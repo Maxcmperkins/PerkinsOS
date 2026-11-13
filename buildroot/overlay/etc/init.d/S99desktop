@@ -1,0 +1,43 @@
+#!/bin/sh
+# Boot straight to the desktop.
+#
+# BusyBox init runs every /etc/init.d/S* script in name order at boot with
+# the argument "start" (and "stop" at shutdown). S99 makes this the last one,
+# after udev (S10) has created the GPU and input device nodes.
+
+# Session environment: XDG_RUNTIME_DIR, LANG, WLR_RENDERER...
+. /etc/profile.d/perkinsos.sh
+export HOME=/root
+
+# Use the PerkinsOS compositor once it is in the image; until then, stock
+# TinyWL. Both take -s CMD: a command to run once the compositor is ready.
+COMPOSITOR=/usr/bin/perkinsos-compositor
+[ -x "$COMPOSITOR" ] || COMPOSITOR=/usr/bin/tinywl
+
+PIDFILE=/run/desktop.pid
+LOGFILE=/var/log/desktop.log
+
+case "$1" in
+start)
+	printf 'Starting desktop (%s): ' "${COMPOSITOR##*/}"
+	cd "$HOME"
+	# -b: run in the background, -m: write its PID to the pidfile.
+	start-stop-daemon -S -q -b -m -p "$PIDFILE" -x /bin/sh -- \
+		-c "exec $COMPOSITOR -s perkinsos-session > $LOGFILE 2>&1"
+	echo "OK"
+	;;
+stop)
+	printf 'Stopping desktop: '
+	start-stop-daemon -K -q -p "$PIDFILE"
+	echo "OK"
+	;;
+restart)
+	"$0" stop
+	sleep 1
+	"$0" start
+	;;
+*)
+	echo "Usage: $0 {start|stop|restart}"
+	exit 1
+	;;
+esac
