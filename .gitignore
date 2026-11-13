@@ -1,6 +1,7 @@
 # Buildroot output and downloads
 output/
 dl/
+.buildroot/
 *.img
 *.qcow2
 *.iso

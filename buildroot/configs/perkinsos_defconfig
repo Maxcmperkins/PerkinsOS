@@ -1,0 +1,42 @@
+# PerkinsOS image config. Based on Buildroot's qemu_x86_64_defconfig.
+# Only options that differ from Buildroot's defaults are listed.
+# Change it with `make menuconfig`, then `make savedefconfig` (which
+# rewrites this file and drops the comments, so re-add what matters).
+
+# Target: 64-bit x86, generic CPU so it runs on any QEMU -cpu setting.
+BR2_x86_64=y
+
+# Toolchain: prebuilt GCC + glibc from Bootlin instead of compiling our own.
+# Saves ~20 min per clean build. glibc because Mesa and wlroots are tested
+# most on it. Includes C++, which Mesa needs in week 2.
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_X86_64_GLIBC_STABLE=y
+
+# Fail the build if any download has no known hash. The hash for our pinned
+# kernel version lives in Buildroot's board/qemu/patches/linux/linux.hash.
+# (Path is relative to the Buildroot tree.)
+BR2_GLOBAL_PATCH_DIR="board/qemu/patches"
+BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
+
+# System: BusyBox init (the default). Hostname and banner shown at login.
+# Root has an empty password: this is a dev VM, and CI must log in unattended.
+BR2_TARGET_GENERIC_HOSTNAME="perkinsos"
+BR2_TARGET_GENERIC_ISSUE="Welcome to PerkinsOS"
+# Bring up the virtio network card with DHCP (QEMU's user-mode network).
+BR2_SYSTEM_DHCP="eth0"
+
+# Kernel: pinned version, with Buildroot's known-good QEMU config.
+# That config already has virtio disk/net, serial console and virtio-gpu.
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="6.18.7"
+BR2_LINUX_KERNEL_USE_CUSTOM_CONFIG=y
+BR2_LINUX_KERNEL_CUSTOM_CONFIG_FILE="board/qemu/x86_64/linux.config"
+BR2_LINUX_KERNEL_NEEDS_HOST_LIBELF=y
+
+# Root filesystem: one ext4 image, attached to QEMU as a virtio disk.
+# No tarball; nothing uses it.
+BR2_TARGET_ROOTFS_EXT2=y
+BR2_TARGET_ROOTFS_EXT2_4=y
+# BR2_TARGET_ROOTFS_TAR is not set
