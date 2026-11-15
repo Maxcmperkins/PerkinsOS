@@ -2,6 +2,8 @@
 
 Draft by Claude; Max edits.
 
+> **Update:** The dock this describes is now in [shell/dock/main.c](../shell/dock/main.c), written by Claude at Max's request. Use this page as a reading guide: the four stages are the order the ideas appear in `main()`.
+
 The dock is your first Wayland **client**: a separate program that connects to your compositor over a socket, exactly like foot does. It needs week 4 (layer-shell) working first.
 
 ## Start

@@ -2,6 +2,8 @@
 
 Draft by Claude; Max edits.
 
+> **Update:** The launcher and app this describes are now in [shell/launcher/main.c](../shell/launcher/main.c) and [shell/sysinfo/main.c](../shell/sysinfo/main.c), written by Claude at Max's request. The launcher is started on demand and exits after one use. Use this page as a reading guide.
+
 Two more clients. The launcher reuses everything from the dock and adds keyboard input. The app is your first ordinary window, so it uses xdg-shell instead of layer-shell.
 
 ## Launcher (`shell/launcher/` → `perkinsos-launcher`)

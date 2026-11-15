@@ -2,6 +2,8 @@
 
 Draft by Claude; Max edits. Line numbers are for `tinywl.c` from wlroots 0.19.2, the file `make fork-tinywl` gives you.
 
+> **Update:** The code this describes is now in [compositor/tinywl.c](../compositor/tinywl.c), written by Claude at Max's request. Use this page as a reading guide: each section says what to look for and has a question worth being able to answer.
+
 ## Start
 
 ```sh

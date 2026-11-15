@@ -2,6 +2,8 @@
 
 Draft by Claude; Max edits.
 
+> **Update:** The code this describes is now in [compositor/tinywl.c](../compositor/tinywl.c) (search for `layer`), written by Claude at Max's request. Use this page as a reading guide.
+
 ## Why
 
 xdg-shell (what TinyWL speaks) only describes ordinary application windows: the compositor decides where they go. A dock needs to say "pin me to the bottom edge, full width, and keep other windows off me". That is what the `wlr-layer-shell-unstable-v1` protocol is for. Your dock (week 5) can't exist until your compositor implements the server side of it.
