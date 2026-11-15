@@ -310,6 +310,11 @@ static bool handle_keybinding(struct tinywl_server *server, xkb_keysym_t sym) {
 		/* PerkinsOS: Alt+Enter opens a terminal. */
 		spawn("foot");
 		break;
+	case XKB_KEY_p:
+		/* PerkinsOS: Alt+P opens the launcher, unless one is already
+		 * open (pidof succeeds, so the part after || doesn't run). */
+		spawn("pidof perkinsos-launcher > /dev/null || perkinsos-launcher");
+		break;
 	case XKB_KEY_q:
 		/* PerkinsOS: Alt+Q asks the focused window to close. The list is
 		 * kept in focus order, so the first entry is the focused one. This
