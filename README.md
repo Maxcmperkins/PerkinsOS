@@ -1,6 +1,6 @@
 # PerkinsOS
 
-A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU.
+A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. It is themed as a fighter-jet head-up display, with a Tornado, Typhoon and Lightning on the wallpaper.
 
 [![CI](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml/badge.svg)](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml)
 
@@ -14,7 +14,7 @@ The GIF is recorded by `make demo` from a headless boot: every frame is a screen
 | --- | --- |
 | Linux kernel, Mesa, libinput, wlroots, foot | Upstream, built from source by Buildroot |
 | Compositor (`compositor/`) | Forked from TinyWL (wlroots 0.19.2); wallpaper, borders, keybindings, layer-shell and maximize added |
-| Dock, launcher, System Info app (`shell/`) | Written for this project: plain C on wayland-client, cairo and xkbcommon |
+| Wallpaper, dock, launcher, System Info app (`shell/`) | Written for this project: plain C on wayland-client, cairo and xkbcommon |
 | Boot-to-desktop init (`buildroot/overlay/`) | Written for this project |
 | Build, tests, CI (`Makefile`, `buildroot/`, `ci/`) | Written for this project |
 
@@ -27,6 +27,7 @@ QEMU (x86_64, virtio-gpu)
 └── Linux kernel
     └── init (boots straight to desktop)
         └── PerkinsOS compositor (wlroots)
+            ├── wallpaper    (layer-shell client, background layer)
             ├── dock         (layer-shell client, bottom edge)
             ├── launcher     (layer-shell client, overlay, takes the keyboard)
             └── apps         (xdg-shell clients)
@@ -86,7 +87,8 @@ docs/         plan, setup, architecture, week-by-week notes, write-up
 Ideas parked here so they don't derail the plan.
 
 - Key repeat in the launcher, and clicking a result to start it
-- A wallpaper image instead of a solid colour (a background-layer client)
+- Animate the wallpaper: a moving horizon, or live numbers in the HUD read-outs
+- Icons on the dock; System Info as cockpit gauges
 - Server-side title bars, so every window gets the same one
 - Alt+drag to move a window from anywhere
 - Multiple screens: layer surfaces and maximize currently assume the first one

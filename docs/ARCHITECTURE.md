@@ -14,6 +14,7 @@ make run
             └── S99desktop        starts the compositor
                 └── perkinsos-compositor   wlroots: owns the screen and input devices
                     └── perkinsos-session  run once the compositor is ready
+                        ├── perkinsos-wallpaper   always on screen, behind everything
                         └── perkinsos-dock        always on screen
                             ├── perkinsos-launcher   on demand (Apps button, Alt+P)
                             ├── perkinsos-sysinfo    on demand
@@ -27,8 +28,8 @@ A serial console (`ttyS0`) runs alongside: the terminal you typed `make run` in 
 `compositor/tinywl.c` is stock TinyWL plus changes marked `PerkinsOS:`. It never draws anything itself. It maintains a **scene graph** and wlroots repaints whatever changed. The scene is a stack of trees, drawn back to front:
 
 ```
-wallpaper   one filled rectangle per screen
-background  ┐ layer-shell layers below windows
+wallpaper   one filled rectangle per screen (seen only until the client below draws)
+background  ┐ layer-shell layers below windows: perkinsos-wallpaper is here
 bottom      ┘
 windows     xdg-shell toplevels, each with four border rectangles
 top         ┐ layer-shell layers above windows: the dock is here
@@ -51,6 +52,7 @@ Both use the same handshake: the client commits with no buffer, the compositor r
 - `buffer_create()`: a shared-memory pixel buffer (`memfd_create` + `mmap`), wrapped in a cairo surface so drawing goes straight into memory the compositor can read.
 - `dispatch_with_timeout()`: one step of the Wayland event loop with a timeout, so a client can also wake on a timer (the dock's clock, System Info's refresh).
 - `apps.h`: the list of apps shown by both the dock and the launcher.
+- `theme.h`: the HUD colours, font and line weight used by every client.
 
 ## How a frame reaches the screen
 
