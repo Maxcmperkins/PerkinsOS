@@ -34,9 +34,11 @@
 
 /* PerkinsOS: look and feel. Colours are RGBA, each channel 0.0 to 1.0. */
 #define BORDER_WIDTH 2
-static const float wallpaper_color[4] = {0.09f, 0.13f, 0.20f, 1.0f};
-static const float border_focused[4] = {0.30f, 0.65f, 1.00f, 1.0f};
-static const float border_unfocused[4] = {0.27f, 0.30f, 0.36f, 1.0f};
+/* HUD theme: the same greens as shell/common/theme.h. wallpaper_color is
+ * only what shows before perkinsos-wallpaper has drawn its first frame. */
+static const float wallpaper_color[4] = {0.005f, 0.025f, 0.012f, 1.0f};
+static const float border_focused[4] = {0.20f, 1.00f, 0.40f, 1.0f};
+static const float border_unfocused[4] = {0.06f, 0.30f, 0.13f, 1.0f};
 
 /* For brevity's sake, struct members are annotated where they are used. */
 enum tinywl_cursor_mode {
