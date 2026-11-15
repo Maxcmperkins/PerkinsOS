@@ -994,6 +994,45 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	arrange_layers(output);
 }
 
+/* PerkinsOS: maximize or restore a window. Maximized means filling the
+ * usable area of the first screen: the screen minus whatever the dock and
+ * other layer surfaces have claimed. That is the reason usable_area exists. */
+static void toplevel_set_maximized(struct tinywl_toplevel *toplevel,
+		bool maximize) {
+	struct tinywl_server *server = toplevel->server;
+	struct wlr_xdg_toplevel *xdg_toplevel = toplevel->xdg_toplevel;
+	if (maximize == toplevel->maximized || wl_list_empty(&server->outputs)) {
+		/* Nothing to change, but the protocol still requires a reply. */
+		wlr_xdg_surface_schedule_configure(xdg_toplevel->base);
+		return;
+	}
+	struct wlr_scene_node *node = &toplevel->scene_tree->node;
+	if (maximize) {
+		struct tinywl_output *output =
+			wl_container_of(server->outputs.next, output, link);
+		/* Remember where the window was so un-maximizing can put it back. */
+		toplevel->restore.x = node->x;
+		toplevel->restore.y = node->y;
+		toplevel->restore.width = xdg_toplevel->base->geometry.width;
+		toplevel->restore.height = xdg_toplevel->base->geometry.height;
+		wlr_scene_node_set_position(node,
+			output->usable_area.x, output->usable_area.y);
+		wlr_xdg_toplevel_set_size(xdg_toplevel,
+			output->usable_area.width, output->usable_area.height);
+	} else {
+		/* A restore size of 0x0 (the window was never un-maximized before)
+		 * means "client, pick your own size". */
+		wlr_scene_node_set_position(node,
+			toplevel->restore.x, toplevel->restore.y);
+		wlr_xdg_toplevel_set_size(xdg_toplevel,
+			toplevel->restore.width, toplevel->restore.height);
+	}
+	/* Tell the client its new state so it can redraw to match (for
+	 * example, swap its maximize button for a restore button). */
+	wlr_xdg_toplevel_set_maximized(xdg_toplevel, maximize);
+	toplevel->maximized = maximize;
+}
+
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 	/* Called when the surface is mapped, or ready to display on-screen. */
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, map);
@@ -1001,8 +1040,15 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 	/* PerkinsOS: stock TinyWL opens every window at 0,0, exactly on top of
 	 * the last one. Step each new window down and right so they cascade. */
 	int n = wl_list_length(&toplevel->server->toplevels) % 8;
-	wlr_scene_node_set_position(&toplevel->scene_tree->node,
-		40 + 32 * n, 40 + 32 * n);
+	if (toplevel->maximized) {
+		/* It asked to start maximized and is already in place; make the
+		 * cascade slot the spot it returns to when un-maximized. */
+		toplevel->restore.x = 40 + 32 * n;
+		toplevel->restore.y = 40 + 32 * n;
+	} else {
+		wlr_scene_node_set_position(&toplevel->scene_tree->node,
+			40 + 32 * n, 40 + 32 * n);
+	}
 	toplevel_update_borders(toplevel);
 
 	wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
@@ -1042,6 +1088,12 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 		 * configures the xdg_toplevel with 0,0 size to let the client pick the
 		 * dimensions itself. */
 		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+		/* PerkinsOS: a client may ask to be maximized before this first
+		 * commit (`foot --maximized`). The request could not be answered
+		 * then, so apply it now; it replaces the 0,0 size above. */
+		if (toplevel->xdg_toplevel->requested.maximized) {
+			toplevel_set_maximized(toplevel, true);
+		}
 		return;
 	}
 
@@ -1131,45 +1183,13 @@ static void xdg_toplevel_request_maximize(
 	 * anything and let the client finish the initial surface setup. */
 	struct tinywl_toplevel *toplevel =
 		wl_container_of(listener, toplevel, request_maximize);
-	struct tinywl_server *server = toplevel->server;
-	struct wlr_xdg_toplevel *xdg_toplevel = toplevel->xdg_toplevel;
-	if (!xdg_toplevel->base->initialized) {
-		return;
+	/* PerkinsOS: stock TinyWL ignores maximize. "requested" holds what the
+	 * client just asked for. Before the first commit we can't reply yet;
+	 * xdg_toplevel_commit() picks the request up then. */
+	if (toplevel->xdg_toplevel->base->initialized) {
+		toplevel_set_maximized(toplevel,
+			toplevel->xdg_toplevel->requested.maximized);
 	}
-
-	/* PerkinsOS: stock TinyWL ignores maximize. We fill the usable area of
-	 * the first screen, which is the screen minus whatever the dock and
-	 * other layer surfaces have claimed. That is the reason usable_area
-	 * exists. "requested" is what the client just asked for. */
-	bool maximize = xdg_toplevel->requested.maximized;
-	if (maximize == toplevel->maximized || wl_list_empty(&server->outputs)) {
-		/* Nothing to change, but the protocol still requires a reply. */
-		wlr_xdg_surface_schedule_configure(xdg_toplevel->base);
-		return;
-	}
-	struct wlr_scene_node *node = &toplevel->scene_tree->node;
-	if (maximize) {
-		struct tinywl_output *output =
-			wl_container_of(server->outputs.next, output, link);
-		/* Remember where the window was so un-maximizing can put it back. */
-		toplevel->restore.x = node->x;
-		toplevel->restore.y = node->y;
-		toplevel->restore.width = xdg_toplevel->base->geometry.width;
-		toplevel->restore.height = xdg_toplevel->base->geometry.height;
-		wlr_scene_node_set_position(node,
-			output->usable_area.x, output->usable_area.y);
-		wlr_xdg_toplevel_set_size(xdg_toplevel,
-			output->usable_area.width, output->usable_area.height);
-	} else {
-		wlr_scene_node_set_position(node,
-			toplevel->restore.x, toplevel->restore.y);
-		wlr_xdg_toplevel_set_size(xdg_toplevel,
-			toplevel->restore.width, toplevel->restore.height);
-	}
-	/* Tell the client its new state so it can redraw to match (for
-	 * example, swap its maximize button for a restore button). */
-	wlr_xdg_toplevel_set_maximized(xdg_toplevel, maximize);
-	toplevel->maximized = maximize;
 }
 
 static void xdg_toplevel_request_fullscreen(

@@ -1,7 +1,19 @@
 # compositor/
 
-The PerkinsOS Wayland compositor. **Max writes the code in this folder.**
+The PerkinsOS Wayland compositor: stock TinyWL from wlroots 0.19.2 plus the changes marked `PerkinsOS:` in [tinywl.c](tinywl.c).
 
-Empty until week 3. Start it with `make fork-tinywl` from the top of the repo, which copies stock TinyWL (from the pinned wlroots release) here as the starting point. See [docs/WEEK3.md](../docs/WEEK3.md).
+- Commit `068d7ce` is the untouched fork. `git diff 068d7ce -- compositor/` shows everything added since.
+- Build: `make compositor` from the top of the repo (the rule is in `buildroot/package/perkinsos-compositor/`).
+- If the screen stays black after a change, log in on the serial console and read `/var/log/desktop.log`.
 
-Until then the image runs stock TinyWL.
+What was added, in the order it was built:
+
+| Change | Where to look |
+| --- | --- |
+| Wallpaper | `server_new_output`, `wallpaper_tree` |
+| Window borders, coloured by focus | `toplevel_update_borders`, `focus_toplevel` |
+| Keybindings (Alt+Enter, Alt+Q, Alt+P) | `handle_keybinding`, `spawn` |
+| Layer-shell | `server_new_layer_surface`, `arrange_layers`, `layer_surface_*` |
+| Maximize into the area the dock leaves free | `xdg_toplevel_request_maximize`, `usable_area` |
+
+[docs/WEEK3.md](../docs/WEEK3.md) and [docs/WEEK4.md](../docs/WEEK4.md) explain the ideas behind each.
