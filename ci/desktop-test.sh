@@ -81,28 +81,61 @@ if grep -aq '^compositor=perkinsos' "$LOG"; then
 	grep -aq '^appclosed=0' "$LOG" || fail "Alt+Q did not close System Info"
 	echo "ok: System Info closed on request"
 
-	# Maximize: a maximized window fills the screen except the dock.
-	send 'WAYLAND_DISPLAY=wayland-0 foot --maximized > /dev/null 2>&1 &'
-	count maximized foot
-	grep -aq '^maximized=1' "$LOG" || fail "foot --maximized did not start"
+	# Mouse: clicking a dock button starts its program. (TERMINAL is the
+	# second button; see button_x() in shell/dock/main.c.)
+	mouse_click 196 744
+	count dockclick foot
+	grep -aq '^dockclick=1' "$LOG" || fail "clicking the dock's TERMINAL button did not open a terminal"
+	echo "ok: clicking TERMINAL on the dock opened a terminal"
+	press alt-q
+	count dockclosed foot
+
+	# Wallpaper: it animates, and clicking a radar contact locks it.
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/radar1-test.png > /dev/null
+	sleep 1.7
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/radar2-test.png > /dev/null
+	cmp -s output/radar1-test.png output/radar2-test.png && fail "the wallpaper is not animating"
+	echo "ok: the wallpaper is animating"
+	CONTACT=$(python3 "$(dirname "$0")/find-contact.py" output/radar1-test.png output/radar2-test.png) || fail "no contact on the radar"
+	mouse_click $CONTACT
+	mouse_move 512 150        # move away: a lock must outlive the hover
+	sleep 1.5
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/radar-lock-test.png > /dev/null
+	# The "TGT LOCKED" details appear right of the scope. Count bright
+	# green pixels there: clouds are dim, text is full brightness.
+	python3 - output/radar2-test.png output/radar-lock-test.png <<'PY' || fail "clicking a radar contact did not lock it"
+import sys
+sys.path.insert(0, "ci")
+from gif import read_png
+def bright(path):
+    w, h, rgb = read_png(path)
+    return sum(1 for y in range(560, 650) for x in range(228, 340)
+               if rgb[(y * w + x) * 3 + 1] > 200)
+sys.exit(0 if bright(sys.argv[1]) < 10 and bright(sys.argv[2]) > 60 else 1)
+PY
+	echo "ok: clicking a radar contact at $CONTACT locked it"
+
+	# Maximize: a maximized window fills the screen except the dock. The
+	# terminal reports its own size in character cells once it has been
+	# resized (a normal foot window is 80x24).
+	send 'WAYLAND_DISPLAY=wayland-0 foot --maximized sh -c "sleep 2; stty size > /tmp/maxsize; sleep 60" > /dev/null 2>&1 &'
+	send 'sleep 4; echo cells=$(tr " " x < /tmp/maxsize)'
+	wait_for '^cells=[0-9]'
 	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/maximize-test.png > /dev/null
-	# Compare with the first screenshot (empty desktop + dock): the pixel
-	# just above the dock in the bottom-right corner must have changed from
-	# wallpaper to window, and a pixel inside the dock must be unchanged.
-	python3 - "$SHOT" output/maximize-test.png <<'PY' || fail "maximized window does not fill the area above the dock, or covers the dock"
+	CELLS=$(grep -a '^cells=' "$LOG" | tr -d '\r' | cut -d= -f2)
+	ROWS=${CELLS%x*}; COLS=${CELLS#*x}
+	[ "$ROWS" -ge 40 ] && [ "$COLS" -ge 120 ] || fail "maximized terminal is only $CELLS cells"
+	# The dock must still be visible: its top edge line and a button
+	# outline are the same pixels as in the first screenshot.
+	python3 - "$SHOT" output/maximize-test.png <<'PY' || fail "the maximized window covers the dock"
 import sys
 sys.path.insert(0, "ci")
 from gif import read_png
 (w, h, before), (_, _, after) = read_png(sys.argv[1]), read_png(sys.argv[2])
-def pixel(rgb, x, y):
-    return rgb[(y * w + x) * 3:(y * w + x) * 3 + 3]
-above_dock = (w - 3, h - 48 - 3)
-in_dock = (w // 2, h - 10)
-covered = pixel(before, *above_dock) != pixel(after, *above_dock)
-dock_intact = pixel(before, *in_dock) == pixel(after, *in_dock)
-sys.exit(0 if covered and dock_intact else 1)
+row = lambda rgb, y: rgb[y * w * 3:(y * w + 400) * 3]      # left 400 px: the buttons
+sys.exit(0 if all(row(before, y) == row(after, y) for y in range(h - 48, h)) else 1)
 PY
-	echo "ok: a maximized window fills the screen and stops at the dock"
+	echo "ok: a maximized window fills the screen ($CELLS cells) and stops at the dock"
 	press alt-q
 fi
 

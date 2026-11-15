@@ -3,18 +3,20 @@
 # How it works: `make run` wires the VM's serial console to stdin/stdout.
 # We feed stdin from a FIFO so we can "type" into the VM, and send stdout
 # to a log file that we poll for the text we expect. QEMU's monitor is on a
-# unix socket so tests can ask QEMU itself for things like screenshots.
+# unix socket so tests can ask QEMU itself for things like screenshots, and
+# its QMP socket lets them move and click the mouse.
 
 TIMEOUT=${TIMEOUT:-180}          # seconds allowed per step (slow without KVM)
 WORK=$(mktemp -d)
 LOG=$WORK/serial.log
 MONITOR=$WORK/monitor.sock
+QMP=$WORK/qmp.sock               # QEMU's JSON control socket, for the mouse
 
 # start_vm: boot the image with no window and wait for the login prompt.
 start_vm() {
 	mkfifo "$WORK/in"
 	make -s run QEMU_DISPLAY=none \
-		QEMU_EXTRA="-monitor unix:$MONITOR,server,nowait" \
+		QEMU_EXTRA="-monitor unix:$MONITOR,server,nowait -qmp unix:$QMP,server,nowait" \
 		< "$WORK/in" > "$LOG" 2>&1 &
 	QEMU_PID=$!
 	exec 3> "$WORK/in"           # keep the FIFO open for writing
@@ -55,6 +57,15 @@ s = socket.socket(socket.AF_UNIX)
 s.connect(sys.argv[1])
 s.sendall(("sendkey " + sys.argv[2] + "\n").encode())
 time.sleep(0.5)' "$MONITOR" "$1"
+}
+
+# mouse_move X Y / mouse_click X Y: put the pointer at a pixel position on
+# the VM's screen, and optionally press the left button there.
+mouse_move() {
+	python3 "$(dirname "${BASH_SOURCE[0]}")/mouse.py" "$QMP" "$1" "$2"
+}
+mouse_click() {
+	python3 "$(dirname "${BASH_SOURCE[0]}")/mouse.py" "$QMP" "$1" "$2" click
 }
 
 # login_root: log in at the prompt and wait for a shell.

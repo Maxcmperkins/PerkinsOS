@@ -38,26 +38,33 @@ login_root
 send 'for i in $(seq 50); do pidof perkinsos-dock >/dev/null && break; sleep 0.2; done; echo dock-ready'
 wait_for '^dock-ready'
 
-frame 3                 # 1: the desktop: wallpaper and dock
+frame 4                 # 1: the desktop: formation, radar, RWR, dock
+frame 0.6               # 2: a moment later, to show it moving
+
+# Lock a radar contact with the mouse.
+CONTACT=$(python3 "$(dirname "$0")/find-contact.py" "$FRAMES/01.png" "$FRAMES/02.png") || fail "no radar contact"
+mouse_click $CONTACT
+mouse_move 420 330
+frame                   # 3: TGT LOCKED with the program's details
 
 press alt-p
-frame                   # 2: launcher open, all apps listed
+frame                   # 4: launcher open, all apps listed
 type_text sys
-frame                   # 3: filtered to System Info
+frame                   # 5: filtered to System Info
 press ret
-frame 2.5               # 4: System Info window
+frame 2.5               # 6: System Info window
 
-press alt-ret
-frame 3                 # 5: a terminal opens on top, focused (blue border)
+mouse_click 196 744     # the dock's TERMINAL button
+frame 3                 # 7: a terminal opens on top, focused
 type_text 'uname -a'
 press ret
-frame                   # 6: a command typed into the terminal
+frame                   # 8: a command typed into the terminal
 
 press alt-f1
-frame                   # 7: Alt+F1 switches focus back to System Info
+frame                   # 9: Alt+F1 switches focus back to System Info
 
 stop_vm
 
-python3 "$(dirname "$0")/gif.py" docs/demo.gif 1.6 "$FRAMES"/*.png
-cp "$FRAMES/06.png" docs/screenshot.png
+python3 "$(dirname "$0")/gif.py" docs/demo.gif 1.5 "$FRAMES"/*.png
+cp "$FRAMES/08.png" docs/screenshot.png
 ls -l docs/demo.gif docs/screenshot.png
