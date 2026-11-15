@@ -18,9 +18,10 @@
 
 #include "apps.h"
 #include "client.h"
+#include "theme.h"
 #include "xdg-shell-client-protocol.h"
 
-#define DEFAULT_WIDTH 380
+#define DEFAULT_WIDTH 400
 #define DEFAULT_HEIGHT 230
 #define TITLE_HEIGHT 34
 
@@ -65,9 +66,9 @@ static long meminfo_kb(const char *key) {
 /* One "Label    value" row; returns the y for the next row. */
 static double draw_row(cairo_t *cr, const char *label, const char *value,
 		double y) {
-	cairo_set_source_rgb(cr, 0.55, 0.62, 0.74);
+	cairo_set_source_rgb(cr, HUD_DIM);
 	draw_text(cr, label, 20, y);
-	cairo_set_source_rgb(cr, 0.95, 0.96, 0.98);
+	cairo_set_source_rgb(cr, HUD_GREEN);
 	draw_text(cr, value, 130, y);
 	return y + 30;
 }
@@ -88,21 +89,25 @@ static void draw(struct sysinfo *app) {
 	cairo_t *cr = app->buffer->cr;
 
 	/* Body, then the title bar across the top. */
-	cairo_set_source_rgb(cr, 0.09, 0.11, 0.16);
+	cairo_set_source_rgb(cr, HUD_BLACK);
 	cairo_paint(cr);
-	cairo_set_source_rgb(cr, 0.14, 0.18, 0.26);
+	cairo_set_source_rgb(cr, HUD_PANEL);
 	cairo_rectangle(cr, 0, 0, app->width, TITLE_HEIGHT);
+	cairo_fill(cr);
+	/* A green rule under the title bar. */
+	cairo_set_source_rgb(cr, HUD_DIM);
+	cairo_rectangle(cr, 0, TITLE_HEIGHT - 1, app->width, 1);
 	cairo_fill(cr);
 
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_BOLD);
-	cairo_set_font_size(cr, 14);
-	cairo_set_source_rgb(cr, 0.95, 0.96, 0.98);
-	draw_text(cr, "System Info", 12, TITLE_HEIGHT / 2.0);
+	cairo_set_font_size(cr, 13);
+	cairo_set_source_rgb(cr, HUD_GREEN);
+	draw_text(cr, "SYSTEM INFO", 12, TITLE_HEIGHT / 2.0);
 
 	/* Close button: an X drawn as two lines in the top-right corner. */
 	double cx = app->width - TITLE_HEIGHT / 2.0, cy = TITLE_HEIGHT / 2.0;
-	cairo_set_line_width(cr, 2);
+	cairo_set_line_width(cr, HUD_LINE);
 	cairo_move_to(cr, cx - 5, cy - 5);
 	cairo_line_to(cr, cx + 5, cy + 5);
 	cairo_move_to(cr, cx + 5, cy - 5);
@@ -117,12 +122,12 @@ static void draw(struct sysinfo *app) {
 	char value[160]; /* fits two 65-byte utsname fields */
 	double y = TITLE_HEIGHT + 34;
 
-	y = draw_row(cr, "System", "PerkinsOS", y);
+	y = draw_row(cr, "SYSTEM", "PerkinsOS", y);
 
 	struct utsname uts;
 	uname(&uts);
 	snprintf(value, sizeof(value), "%s %s", uts.sysname, uts.release);
-	y = draw_row(cr, "Kernel", value, y);
+	y = draw_row(cr, "KERNEL", value, y);
 
 	double uptime = 0;
 	FILE *file = fopen("/proc/uptime", "r");
@@ -134,13 +139,13 @@ static void draw(struct sysinfo *app) {
 	}
 	int seconds = (int)uptime;
 	snprintf(value, sizeof(value), "%d min %02d s", seconds / 60, seconds % 60);
-	y = draw_row(cr, "Uptime", value, y);
+	y = draw_row(cr, "UPTIME", value, y);
 
 	long total = meminfo_kb("MemTotal");
 	long available = meminfo_kb("MemAvailable");
 	snprintf(value, sizeof(value), "%ld MB used of %ld MB",
 		(total - available) / 1024, total / 1024);
-	y = draw_row(cr, "Memory", value, y);
+	y = draw_row(cr, "MEMORY", value, y);
 
 	double load = 0;
 	file = fopen("/proc/loadavg", "r");
@@ -151,7 +156,7 @@ static void draw(struct sysinfo *app) {
 		fclose(file);
 	}
 	snprintf(value, sizeof(value), "%.2f (1 min average)", load);
-	draw_row(cr, "Load", value, y);
+	draw_row(cr, "LOAD", value, y);
 
 	cairo_surface_flush(app->buffer->cairo_surface);
 	wl_surface_attach(app->surface, app->buffer->wl_buffer, 0, 0);

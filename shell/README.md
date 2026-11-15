@@ -4,12 +4,17 @@ The PerkinsOS dock, launcher and apps. Each folder here becomes one program in t
 
 | Folder | Program | What it is | Started by |
 | --- | --- | --- | --- |
+| `wallpaper/` | `perkinsos-wallpaper` | The HUD backdrop: horizon, pitch ladder, heading tape, three aircraft outlines (layer-shell, background layer) | `perkinsos-session` at boot |
 | `dock/` | `perkinsos-dock` | Bar on the bottom edge: launcher button, app buttons, clock (layer-shell) | `perkinsos-session` at boot |
 | `launcher/` | `perkinsos-launcher` | Search box: type to filter, Enter to start (layer-shell, takes the keyboard) | Dock button, or Alt+P |
 | `sysinfo/` | `perkinsos-sysinfo` | Window showing kernel, uptime, memory, load (xdg-shell) | Dock or launcher |
-| `common/` | (none) | Shared code: shm buffers, event loop step, drawing helpers, the app list | compiled into every program |
+| `common/` | (none) | Shared code: shm buffers, event loop step, drawing helpers, the app list, the theme | compiled into every program |
 
 All `.c` files in a folder are compiled together with everything in `common/`. There is no Makefile here: the build rule lives in [buildroot/package/perkinsos-shell/perkinsos-shell.mk](../buildroot/package/perkinsos-shell/perkinsos-shell.mk). Rebuild with `make shell` from the top of the repo.
+
+The look (colours, font, line weight) is defined once in [common/theme.h](common/theme.h). The window borders in `compositor/tinywl.c` and the terminal colours in `buildroot/overlay/etc/xdg/foot/foot.ini` repeat the same greens.
+
+To add an aircraft to the wallpaper: add a list of outline points and a line in `fleet[]` in [wallpaper/main.c](wallpaper/main.c).
 
 To add an app: create `shell/NAME/main.c`, and add a line to the list in [common/apps.h](common/apps.h) so the dock and launcher show it.
 

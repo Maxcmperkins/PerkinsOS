@@ -3,6 +3,11 @@
 # (it is the -s argument in /etc/init.d/S99desktop), with WAYLAND_DISPLAY set
 # so that clients started here know which compositor to connect to.
 
+# The wallpaper: a background-layer client that draws the HUD backdrop.
+if command -v perkinsos-wallpaper > /dev/null; then
+	perkinsos-wallpaper &
+fi
+
 # The dock is the desktop: it has a button for the launcher and for each
 # app. (The launcher is not started here; it opens on demand.)
 if command -v perkinsos-dock > /dev/null; then

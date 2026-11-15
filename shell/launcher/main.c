@@ -23,6 +23,7 @@
 
 #include "apps.h"
 #include "client.h"
+#include "theme.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
 #define WIDTH 420
@@ -94,31 +95,36 @@ static void draw(struct launcher *launcher) {
 	cairo_paint(cr);
 	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-	/* Panel with an accent outline. */
-	rounded_rect(cr, 1, 1, WIDTH - 2, HEIGHT - 2, 12);
-	cairo_set_source_rgb(cr, 0.07, 0.09, 0.14);
+	/* Panel with a green outline. */
+	rounded_rect(cr, 1, 1, WIDTH - 2, HEIGHT - 2, 4);
+	cairo_set_source_rgb(cr, HUD_BLACK);
 	cairo_fill_preserve(cr);
-	cairo_set_source_rgb(cr, 0.30, 0.65, 1.00);
-	cairo_set_line_width(cr, 2);
+	cairo_set_source_rgb(cr, HUD_GREEN);
+	cairo_set_line_width(cr, HUD_LINE);
 	cairo_stroke(cr);
 
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_NORMAL);
-	cairo_set_font_size(cr, 15);
+	cairo_set_font_size(cr, 14);
 
 	/* Search box: the query followed by a cursor bar. */
 	int x = PADDING, y = PADDING, w = WIDTH - 2 * PADDING;
-	rounded_rect(cr, x, y, w, ROW_HEIGHT, 8);
-	cairo_set_source_rgb(cr, 0.14, 0.18, 0.26);
-	cairo_fill(cr);
+	rounded_rect(cr, x + 0.5, y + 0.5, w - 1, ROW_HEIGHT - 1, 3);
+	cairo_set_source_rgb(cr, HUD_PANEL);
+	cairo_fill_preserve(cr);
+	cairo_set_source_rgb(cr, HUD_DIM);
+	cairo_stroke(cr);
 	if (launcher->query[0] == '\0') {
-		cairo_set_source_rgb(cr, 0.50, 0.55, 0.64);
-		draw_text(cr, "Type to search apps", x + 12, y + ROW_HEIGHT / 2.0);
+		cairo_set_source_rgb(cr, HUD_DIM);
+		draw_text(cr, "> SEARCH APPS", x + 12, y + ROW_HEIGHT / 2.0);
 	} else {
-		cairo_set_source_rgb(cr, 0.95, 0.96, 0.98);
-		draw_text(cr, launcher->query, x + 12, y + ROW_HEIGHT / 2.0);
-		double cursor_x = x + 12 + text_width(cr, launcher->query) + 2;
-		cairo_rectangle(cr, cursor_x, y + 10, 2, ROW_HEIGHT - 20);
+		/* A "> " prompt, then what was typed, then a block cursor. */
+		cairo_set_source_rgb(cr, HUD_GREEN);
+		draw_text(cr, "> ", x + 12, y + ROW_HEIGHT / 2.0);
+		double query_x = x + 12 + text_width(cr, "> ");
+		draw_text(cr, launcher->query, query_x, y + ROW_HEIGHT / 2.0);
+		double cursor_x = query_x + text_width(cr, launcher->query) + 2;
+		cairo_rectangle(cr, cursor_x, y + 11, 8, ROW_HEIGHT - 22);
 		cairo_fill(cr);
 	}
 
@@ -126,20 +132,21 @@ static void draw(struct launcher *launcher) {
 	y += ROW_HEIGHT + PADDING;
 	for (int i = 0; i < launcher->match_count; i++) {
 		if (i == launcher->selected) {
-			rounded_rect(cr, x, y, w, ROW_HEIGHT, 8);
-			cairo_set_source_rgb(cr, 0.30, 0.65, 1.00);
+			/* Selected row in inverse video. */
+			rounded_rect(cr, x, y, w, ROW_HEIGHT, 3);
+			cairo_set_source_rgb(cr, HUD_GREEN);
 			cairo_fill(cr);
-			cairo_set_source_rgb(cr, 0.04, 0.06, 0.10);
+			cairo_set_source_rgb(cr, HUD_BLACK);
 		} else {
-			cairo_set_source_rgb(cr, 0.90, 0.92, 0.95);
+			cairo_set_source_rgb(cr, HUD_GREEN);
 		}
 		draw_text(cr, apps[launcher->matches[i]].name, x + 12,
 			y + ROW_HEIGHT / 2.0);
 		y += ROW_HEIGHT;
 	}
 	if (launcher->match_count == 0) {
-		cairo_set_source_rgb(cr, 0.50, 0.55, 0.64);
-		draw_text(cr, "No matching apps", x + 12, y + ROW_HEIGHT / 2.0);
+		cairo_set_source_rgb(cr, HUD_DIM);
+		draw_text(cr, "NO MATCH", x + 12, y + ROW_HEIGHT / 2.0);
 	}
 
 	cairo_surface_flush(launcher->buffer->cairo_surface);

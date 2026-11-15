@@ -23,6 +23,7 @@
 
 #include "apps.h"
 #include "client.h"
+#include "theme.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
 #define DOCK_HEIGHT 48
@@ -53,7 +54,7 @@ struct dock {
 };
 
 static const char *button_label(int index) {
-	return index == 0 ? "Apps" : apps[index - 1].name;
+	return index == 0 ? "APPS" : apps[index - 1].name;
 }
 
 static const char *button_command(int index) {
@@ -96,42 +97,55 @@ static void draw(struct dock *dock) {
 	}
 	cairo_t *cr = dock->buffer->cr;
 
-	/* Background, with a one-pixel lighter line along the top edge. */
-	cairo_set_source_rgb(cr, 0.06, 0.08, 0.12);
+	/* Background, with a one-pixel green line along the top edge. */
+	cairo_set_source_rgb(cr, HUD_BLACK);
 	cairo_paint(cr);
-	cairo_set_source_rgb(cr, 0.20, 0.24, 0.32);
+	cairo_set_source_rgb(cr, HUD_DIM);
 	cairo_rectangle(cr, 0, 0, dock->width, 1);
 	cairo_fill(cr);
 
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_NORMAL);
-	cairo_set_font_size(cr, 14);
+	cairo_set_font_size(cr, 13);
+	cairo_set_line_width(cr, HUD_LINE);
 
-	/* Buttons. */
+	/* Buttons: an outline with the label inside, like the soft keys round
+	 * a cockpit display. The one under the pointer is drawn in inverse
+	 * video (solid green, dark text). */
 	int top = (DOCK_HEIGHT - BUTTON_HEIGHT) / 2;
 	for (int i = 0; i < BUTTON_COUNT; i++) {
+		/* The half-pixel offset centres a 1.5 px line on the pixel grid,
+		 * which keeps straight edges crisp. */
+		rounded_rect(cr, button_x(i) + 0.5, top + 0.5,
+			BUTTON_WIDTH - 1, BUTTON_HEIGHT - 1, 3);
 		if (i == dock->hover) {
-			cairo_set_source_rgb(cr, 0.30, 0.65, 1.00); /* accent */
-		} else if (i == 0) {
-			cairo_set_source_rgb(cr, 0.22, 0.30, 0.44);
+			cairo_set_source_rgb(cr, HUD_GREEN);
+			cairo_fill(cr);
+			cairo_set_source_rgb(cr, HUD_BLACK);
 		} else {
-			cairo_set_source_rgb(cr, 0.14, 0.18, 0.26);
+			cairo_set_source_rgb(cr, HUD_PANEL);
+			cairo_fill_preserve(cr);
+			/* The launcher button gets the bright outline. */
+			if (i == 0) {
+				cairo_set_source_rgb(cr, HUD_GREEN);
+			} else {
+				cairo_set_source_rgb(cr, HUD_DIM);
+			}
+			cairo_stroke(cr);
+			cairo_set_source_rgb(cr, HUD_GREEN);
 		}
-		rounded_rect(cr, button_x(i), top, BUTTON_WIDTH, BUTTON_HEIGHT, 8);
-		cairo_fill(cr);
-
 		const char *label = button_label(i);
-		cairo_set_source_rgb(cr, 0.95, 0.96, 0.98);
 		draw_text(cr, label,
 			button_x(i) + (BUTTON_WIDTH - text_width(cr, label)) / 2,
 			DOCK_HEIGHT / 2.0);
 	}
 
-	/* Clock, right-aligned. */
+	/* Clock, right-aligned. The VM's clock runs on UTC, which aviation
+	 * writes with a Z ("Zulu time"). */
 	char clock_text[16];
 	time_t now = time(NULL);
-	strftime(clock_text, sizeof(clock_text), "%H:%M", localtime(&now));
-	cairo_set_source_rgb(cr, 0.80, 0.84, 0.90);
+	strftime(clock_text, sizeof(clock_text), "%H:%MZ", gmtime(&now));
+	cairo_set_source_rgb(cr, HUD_GREEN);
 	draw_text(cr, clock_text,
 		dock->width - text_width(cr, clock_text) - 16, DOCK_HEIGHT / 2.0);
 
