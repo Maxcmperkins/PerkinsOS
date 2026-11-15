@@ -1,6 +1,6 @@
 # PerkinsOS
 
-A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon, Tornado and Lightning fly in formation ahead of you over sea and cloud, seen through the HUD, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps. Everything on screen is drawn by code in this repo; there are no image files.
+A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon, Tornado and Lightning fly in formation ahead of you over sea and cloud, seen through the HUD, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps. The aircraft are 3D models, lit and drawn by a small software renderer. Everything on screen is produced by code in this repo; there are no image or model files.
 
 [![CI](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml/badge.svg)](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml)
 
@@ -56,7 +56,13 @@ The cockpit is live:
 - **Radar** (left screen): every contact is a running program. Older programs sit near the centre; one you have just started appears at the edge. Bigger dots use more memory. Hover a contact to see what it is in the data display between the screens; click to lock it and keep its name, PID, memory and CPU there. Click again to break the lock.
 - **RWR** (right screen): every symbol is a program using the CPU right now, labelled with the first two letters of its name. The busier it is, the closer to the centre; the busiest gets a diamond.
 
-The flight (heading, roll, speed, altitude) is a simulation; the radar and RWR are real data from `/proc`.
+- **Dials** (on a wide screen): CPU, memory, load average and number of running programs.
+
+The flight (heading, speed, altitude) is a simulation; the radar, RWR and dials are real data from `/proc`.
+
+### Frame rate
+
+Nothing here uses a graphics card: every pixel is computed by the CPU, inside a virtual machine. Without KVM (hardware virtualisation) QEMU emulates that CPU in software and the desktop manages about 13 frames a second at 1920x1080. With KVM it should reach its cap of 30. See step 4 of [docs/SETUP.md](docs/SETUP.md). The wallpaper measures itself and writes its frame rate, and where the time goes, to `/var/log/desktop.log` every ten seconds. `make run SCREEN=1280x720` is also much lighter.
 
 ## Build and run
 
