@@ -2,21 +2,25 @@
  * Drawing the wallpaper: one frame of the view from a fighter cockpit.
  *
  * What is in the picture, back to front:
- *   outside     sky, a horizon that rolls and pitches, and a cloud deck
- *               streaming towards you underneath
+ *   outside     blue sky, sea and cloud streaming past below (sky.c)
  *   formation   three jets ahead of you, seen from behind: a Typhoon in
  *               front, a Tornado to the left, a Lightning to the right
- *   HUD         the glass in front of you: pitch ladder, flight path
- *               marker, heading tape, speed and altitude
- *   cockpit     canopy frame and instrument panel (cached, never changes)
+ *   HUD         green symbols on the glass in front of you: pitch ladder,
+ *               flight path marker, heading tape, speed and altitude
+ *   cockpit     canopy arch, sills and instrument panel (cached)
  *   screens     left screen: radar, each contact a running program
  *               right screen: RWR, each "threat" a program using the CPU
  *   keys        the buttons between the screens start apps
  *
+ * Everything is designed on a canvas 768 units tall (DESIGN_HEIGHT) and
+ * scaled to the real screen, so the numbers in this file are design units,
+ * not pixels. On a 1024x768 screen a unit is one pixel; on 1920x1080 it
+ * is about 1.4, and because the drawing is vector shapes it stays sharp.
+ *
  * Everything that moves is a function of the time `t`, so a frame can be
  * drawn for any moment without remembering the previous one.
  *
- * The flight (heading, roll, speed, altitude) is a simulation. The radar
+ * The flight (heading, pitch, speed, altitude) is a simulation. The radar
  * and RWR show real data from the machine.
  */
 #include <ctype.h>
@@ -29,10 +33,11 @@
 #include "theme.h"
 #include "wallpaper.h"
 
-#define DOCK_HEIGHT 48   /* keep clear of the dock along the bottom */
+#define DESIGN_HEIGHT 768.0
+#define DOCK_HEIGHT 48   /* screen pixels: the dock doesn't scale */
 #define DEGREES (M_PI / 180.0)
 
-/* Instrument panel sizes, in pixels. */
+/* Instrument panel sizes, in design units. */
 #define PANEL_HEIGHT 236     /* instrument panel, above the dock */
 #define SCREEN_SIZE 176      /* the two square screens */
 #define SCOPE_RADIUS 78      /* radar and RWR circles inside them */
@@ -42,6 +47,31 @@
 #define KEYS_PER_ROW 3
 /* Key 0 opens the launcher; keys 1.. are apps[0]..., as on the dock. */
 #define KEY_COUNT (APP_COUNT + 1)
+
+/* ---- colours for the physical cockpit and the aircraft ---- */
+
+struct colour { double r, g, b; };
+
+static const struct colour metal_light = { 0.50, 0.53, 0.57 };
+static const struct colour metal_mid = { 0.27, 0.29, 0.32 };
+static const struct colour metal_dark = { 0.13, 0.14, 0.16 };
+static const struct colour metal_black = { 0.055, 0.060, 0.070 };
+static const struct colour glass_black = { 0.000, 0.030, 0.014 }; /* a screen, off */
+
+static void set_colour(cairo_t *cr, struct colour c) {
+	cairo_set_source_rgb(cr, c.r, c.g, c.b);
+}
+
+/* Use a top-to-bottom blend of two colours as the paint. Shading like
+ * this is most of what makes a flat shape look solid. */
+static void set_shading(cairo_t *cr, double top_y, double bottom_y,
+		struct colour top, struct colour bottom) {
+	cairo_pattern_t *pattern = cairo_pattern_create_linear(0, top_y, 0, bottom_y);
+	cairo_pattern_add_color_stop_rgb(pattern, 0, top.r, top.g, top.b);
+	cairo_pattern_add_color_stop_rgb(pattern, 1, bottom.r, bottom.g, bottom.b);
+	cairo_set_source(cr, pattern);
+	cairo_pattern_destroy(pattern); /* cairo keeps its own reference */
+}
 
 /* ---- small helpers ---- */
 
@@ -81,19 +111,10 @@ static void polar(double cx, double cy, double bearing_degrees, double range,
 	*y = cy - range * cos(bearing_degrees * DEGREES);
 }
 
-/* A repeatable "random" number from 0 to 1 for a given whole number, so
- * the clouds are in the same places every boot. */
-static double random_for(int n) {
-	unsigned int state = (unsigned int)n * 2654435761u;
-	state ^= state >> 15;
-	state *= 2246822519u;
-	state ^= state >> 13;
-	return (state & 0xffff) / 65536.0;
-}
-
-/* ---- where things are on the screen ---- */
+/* ---- where things are, in design units ---- */
 
 struct layout {
+	double width;              /* canvas width: depends on the screen's shape */
 	double cx;                 /* horizontal centre */
 	double panel_top;          /* top edge of the instrument panel (sides) */
 	double panel_bottom;
@@ -108,11 +129,12 @@ struct layout {
 
 static struct layout layout_for(const struct scene *scene) {
 	struct layout l;
-	l.cx = scene->width / 2.0;
-	l.panel_bottom = scene->height - DOCK_HEIGHT;
+	l.width = scene->width / scene->scale;
+	l.cx = l.width / 2.0;
+	l.panel_bottom = DESIGN_HEIGHT - DOCK_HEIGHT / scene->scale;
 	l.panel_top = l.panel_bottom - PANEL_HEIGHT;
 	l.radar_x = 48 + SCREEN_SIZE / 2.0;
-	l.rwr_x = scene->width - 48 - SCREEN_SIZE / 2.0;
+	l.rwr_x = l.width - 48 - SCREEN_SIZE / 2.0;
 	l.scope_y = l.panel_bottom - 20 - SCREEN_SIZE / 2.0;
 	double keys_width = KEYS_PER_ROW * KEY_WIDTH + (KEYS_PER_ROW - 1) * KEY_GAP;
 	l.keys_x = l.cx - keys_width / 2;
@@ -150,264 +172,249 @@ static const char *key_command(int index) {
 
 struct flight {
 	double heading;  /* degrees */
-	double roll;     /* radians; positive = right wing down */
-	double pitch;    /* pixels the horizon is below the aim point */
+	double pitch;    /* design units the horizon is below the aim point */
 	int speed;       /* knots */
 	int altitude;    /* feet */
 };
 
 static struct flight flight_at(double t) {
 	struct flight f;
-	/* Heading swings either side of north. Roll is the rate the heading
-	 * is changing (you bank to turn), which is its derivative: the
-	 * derivative of sin is cos. Different periods for the rest so nothing
-	 * repeats in step. */
+	/* Each quantity drifts on its own period so nothing repeats in step. */
 	f.heading = 360 + 14 * sin(t * 0.07);
-	f.roll = 5.0 * DEGREES * cos(t * 0.07);
-	f.pitch = 14 + 7 * sin(t * 0.23);
+	f.pitch = 16 + 8 * sin(t * 0.23);
 	f.speed = 450 + (int)lround(4 * sin(t * 0.31));
 	f.altitude = 24500 + 10 * (int)lround(6 * sin(t * 0.19));
 	return f;
 }
 
-/* Switch to "world" coordinates: origin at the point on the horizon dead
- * ahead, x along the horizon, y down. Everything outside the aircraft is
- * drawn in these, so rolling and pitching the aircraft moves it all
- * together. Must be paired with cairo_restore(). */
-static void enter_world(cairo_t *cr, const struct layout *l,
-		const struct flight *f) {
-	cairo_save(cr);
-	cairo_translate(cr, l->aim_x, l->aim_y);
-	cairo_rotate(cr, -f->roll); /* we roll right, so the world tilts left */
-	cairo_translate(cr, 0, f->pitch);
-}
-
-/* ---- outside: sky, horizon, cloud deck ---- */
-
-static void draw_outside(struct scene *scene, cairo_t *cr,
-		const struct layout *l, const struct flight *f, double t) {
-	/* Sky: one flat fill of the whole frame. */
-	cairo_set_source_rgb(cr, 0.006, 0.030, 0.015);
-	cairo_paint(cr);
-
-	enter_world(cr, l, f);
-	const double far = 2000; /* big enough to cover the screen when rolled */
-
-	/* Haze above the horizon and the cloud deck below it, each as a few
-	 * flat bands that get brighter towards the horizon. A smooth gradient
-	 * would look a little better, but it has to be computed for every
-	 * pixel of every frame; flat fills are several times cheaper. */
-	static const struct { double from, to, level; } haze[] = {
-		{ -84, -52, 0.025 }, { -52, -26, 0.05 }, { -26, 0, 0.085 },
-	};
-	for (int i = 0; i < 3; i++) {
-		cairo_set_source_rgba(cr, HUD_GREEN, haze[i].level);
-		cairo_rectangle(cr, -far, haze[i].from, 2 * far,
-			haze[i].to - haze[i].from);
-		cairo_fill(cr);
-	}
-	static const struct { double from, r, g, b; } deck[] = {
-		{ 0, 0.035, 0.170, 0.080 }, { 14, 0.030, 0.145, 0.068 },
-		{ 36, 0.025, 0.118, 0.056 }, { 72, 0.020, 0.094, 0.045 },
-		{ 130, 0.015, 0.074, 0.036 },
-	};
-	for (int i = 0; i < 5; i++) {
-		/* Each band runs from its start to far below; later bands paint
-		 * over the lower part of earlier ones. */
-		cairo_set_source_rgb(cr, deck[i].r, deck[i].g, deck[i].b);
-		cairo_rectangle(cr, -far, deck[i].from, 2 * far, far);
-		cairo_fill(cr);
-	}
-
-	/* Cloud tops rushing towards you. Each puff has a fixed sideways
-	 * position and a distance that shrinks with time and wraps round.
-	 * Perspective is one division: things at distance z are drawn 1/z as
-	 * big and 1/z as far from the horizon. That single rule makes puffs
-	 * crawl near the horizon and sweep past underneath you. */
-	for (int i = 0; i < 26; i++) {
-		double sideways = (random_for(i * 3) - 0.5) * 2.6;
-		double progress = fmod(random_for(i * 3 + 1) + t * 0.085, 1.0);
-		double z = 1.0 - 0.90 * progress;       /* 1 = far, 0.10 = close */
-		double x = sideways * 330 / z;
-		double y = 20 / z;
-		double rx = (26 + 22 * random_for(i * 3 + 2)) / z;
-		double ry = 4.5 / z;
-		/* Fade in at the horizon so puffs don't pop into existence. */
-		double alpha = 0.16 * fmin(1.0, progress * 5);
-		ellipse(cr, x, y, rx, ry);
-		cairo_set_source_rgba(cr, HUD_GREEN, alpha);
-		cairo_fill(cr);
-	}
-
-	/* A few distant cloud banks sitting on the horizon. */
-	for (int i = 0; i < 5; i++) {
-		double x = (random_for(100 + i) - 0.5) * 1500 -
-			(f->heading - 360) * 9; /* they slide as the heading changes */
-		ellipse(cr, x, -6 - 10 * random_for(200 + i),
-			120 + 90 * random_for(300 + i), 9 + 7 * random_for(400 + i));
-		cairo_set_source_rgba(cr, HUD_GREEN, 0.07);
-		cairo_fill(cr);
-	}
-
-	/* The horizon itself. */
-	cairo_set_source_rgb(cr, HUD_DIM);
-	cairo_set_line_width(cr, 1);
-	line(cr, -far, 0, far, 0);
-	cairo_restore(cr);
-}
-
 /* ---- the formation, seen from behind ----
  *
- * Each aircraft is drawn around 0,0 with `s` = half its wingspan in pixels.
+ * Each aircraft is drawn around 0,0 with `s` = half its wingspan. You are
+ * a little above them, so you see a sliver of the top of each wing.
  * From behind, what tells them apart is the engines and the tail:
  *   Typhoon    two engines side by side, low delta wing, small canards
  *   Tornado    two engines side by side, wings on top of the fuselage, a
  *              very tall fin, tailplanes drooping
- *   Lightning  two engines stacked one above the other
+ *   Lightning  two engines stacked one above the other, bare metal finish
  */
 
-/* One engine nozzle: a ring with the glow of the exhaust inside. */
-static void nozzle(cairo_t *cr, double x, double y, double radius,
-		double glow) {
-	circle(cr, x, y, radius);
-	cairo_set_source_rgba(cr, HUD_GREEN, glow);
+/* The paint scheme of the aircraft currently being drawn. */
+static struct colour paint_top, paint_side, paint_under, paint_line;
+
+static void use_grey_paint(void) {
+	paint_top = (struct colour){ 0.69, 0.72, 0.76 };
+	paint_side = (struct colour){ 0.49, 0.52, 0.57 };
+	paint_under = (struct colour){ 0.28, 0.30, 0.34 };
+	paint_line = (struct colour){ 0.13, 0.14, 0.16 };
+}
+
+static void use_metal_paint(void) {
+	paint_top = (struct colour){ 0.86, 0.88, 0.90 };
+	paint_side = (struct colour){ 0.62, 0.65, 0.69 };
+	paint_under = (struct colour){ 0.36, 0.38, 0.42 };
+	paint_line = (struct colour){ 0.17, 0.18, 0.20 };
+}
+
+/* Fill the current path shaded from `top` at top_y to `bottom` at
+ * bottom_y, then outline it thinly. */
+static void solid(cairo_t *cr, double top_y, double bottom_y,
+		struct colour top, struct colour bottom) {
+	set_shading(cr, top_y, bottom_y, top, bottom);
 	cairo_fill_preserve(cr);
-	cairo_set_source_rgb(cr, HUD_GREEN);
+	set_colour(cr, paint_line);
 	cairo_stroke(cr);
 }
 
-/* Fill the current path dark (so the horizon doesn't show through the
- * aircraft) and outline it. */
-static void body(cairo_t *cr) {
-	cairo_set_source_rgb(cr, 0.02, 0.11, 0.05);
-	cairo_fill_preserve(cr);
-	cairo_set_source_rgb(cr, HUD_GREEN);
-	cairo_stroke(cr);
-}
-
-/* A wing or tailplane seen edge-on: a thin sliver from root to tip, on
- * both sides. */
+/* A wing or tailplane on both sides: a tapered slab from root to tip.
+ * `thick` is half its thickness at the root; the tip is a third of that. */
 static void wings(cairo_t *cr, double root_x, double root_y,
-		double tip_x, double tip_y, double thickness) {
+		double tip_x, double tip_y, double thick) {
+	double tip_thick = thick / 3;
 	for (int side = -1; side <= 1; side += 2) {
-		cairo_move_to(cr, side * root_x, root_y - thickness);
-		cairo_line_to(cr, side * tip_x, tip_y);
-		cairo_line_to(cr, side * root_x, root_y + thickness);
+		cairo_move_to(cr, side * root_x, root_y - thick);
+		cairo_line_to(cr, side * tip_x, tip_y - tip_thick);
+		cairo_line_to(cr, side * tip_x, tip_y + tip_thick);
+		cairo_line_to(cr, side * root_x, root_y + thick);
 		cairo_close_path(cr);
-		body(cr);
+		solid(cr, root_y - thick, root_y + thick, paint_top, paint_under);
 	}
 }
 
-/* A fin seen from behind: a narrow upright blade. */
+/* A fin seen from behind: a narrow upright blade, lit from the left. */
 static void fin(cairo_t *cr, double base_y, double top_y, double half_width) {
 	cairo_move_to(cr, -half_width, base_y);
-	cairo_line_to(cr, 0, top_y);
+	cairo_line_to(cr, -half_width * 0.35, top_y);
+	cairo_line_to(cr, half_width * 0.35, top_y);
 	cairo_line_to(cr, half_width, base_y);
 	cairo_close_path(cr);
-	body(cr);
+	solid(cr, top_y, base_y, paint_top, paint_side);
 }
 
-static void draw_typhoon(cairo_t *cr, double s, double glow) {
-	wings(cr, 0.14 * s, 0.05 * s, s, 0.11 * s, 0.035 * s);
-	wings(cr, 0.15 * s, -0.10 * s, 0.34 * s, -0.15 * s, 0.018 * s); /* canards */
-	fin(cr, -0.14 * s, -0.56 * s, 0.022 * s);
-	/* Fuselage, with the box of the chin intake underneath. */
-	rounded_rect(cr, -0.17 * s, -0.15 * s, 0.34 * s, 0.27 * s, 0.07 * s);
-	body(cr);
-	cairo_rectangle(cr, -0.14 * s, 0.12 * s, 0.28 * s, 0.07 * s);
-	body(cr);
-	nozzle(cr, -0.08 * s, -0.02 * s, 0.068 * s, glow);
-	nozzle(cr, 0.08 * s, -0.02 * s, 0.068 * s, glow);
+/* The back of the canopy, showing over the top of the fuselage. */
+static void canopy(cairo_t *cr, double y, double rx, double ry) {
+	ellipse(cr, 0, y, rx, ry);
+	solid(cr, y - ry, y + ry, (struct colour){ 0.55, 0.68, 0.80 },
+		(struct colour){ 0.12, 0.17, 0.24 });
 }
 
-static void draw_tornado(cairo_t *cr, double s, double glow) {
-	wings(cr, 0.16 * s, 0.08 * s, 0.50 * s, 0.14 * s, 0.022 * s);  /* tailplanes */
-	wings(cr, 0.16 * s, -0.13 * s, s, -0.07 * s, 0.035 * s);       /* wings, up high */
-	fin(cr, -0.17 * s, -0.86 * s, 0.03 * s);
-	rounded_rect(cr, -0.19 * s, -0.18 * s, 0.38 * s, 0.36 * s, 0.05 * s);
-	body(cr);
-	nozzle(cr, -0.09 * s, 0.02 * s, 0.076 * s, glow);
-	nozzle(cr, 0.09 * s, 0.02 * s, 0.076 * s, glow);
+/* A jet pipe: a dark metal ring with a black hole. The glow of the
+ * exhaust is added every frame, on top (see draw_formation). */
+static void nozzle(cairo_t *cr, double x, double y, double radius) {
+	circle(cr, x, y, radius);
+	solid(cr, y - radius, y + radius, (struct colour){ 0.42, 0.42, 0.44 },
+		(struct colour){ 0.15, 0.15, 0.17 });
+	circle(cr, x, y, radius * 0.72);
+	cairo_set_source_rgb(cr, 0.03, 0.03, 0.04);
+	cairo_fill(cr);
 }
 
-static void draw_lightning(cairo_t *cr, double s, double glow) {
-	wings(cr, 0.13 * s, 0.26 * s, 0.46 * s, 0.30 * s, 0.020 * s);  /* tailplanes, low */
-	wings(cr, 0.14 * s, 0.00 * s, s, 0.09 * s, 0.035 * s);
-	fin(cr, -0.30 * s, -0.84 * s, 0.028 * s);
-	/* A tall, narrow fuselage: the two engines are one above the other. */
-	ellipse(cr, 0, 0, 0.16 * s, 0.33 * s);
-	body(cr);
-	nozzle(cr, 0, -0.13 * s, 0.105 * s, glow);
-	nozzle(cr, 0, 0.13 * s, 0.105 * s, glow);
+/* A missile or fuel tank hanging under the wing, on both sides. */
+static void stores(cairo_t *cr, double x, double y, double radius) {
+	for (int side = -1; side <= 1; side += 2) {
+		circle(cr, side * x, y, radius);
+		solid(cr, y - radius, y + radius, paint_side, paint_under);
+	}
 }
 
 struct wingman {
 	const char *name;
-	void (*draw)(cairo_t *cr, double s, double glow);
-	double offset_x, offset_y; /* from the aim point, in pixels */
+	void (*draw)(cairo_t *cr, double s);
+	double offset_x, offset_y; /* from the aim point */
 	double size;               /* half wingspan: nearer aircraft are bigger */
-	bool label_beside;         /* name beside the fin instead of underneath */
+	/* Engine nozzles: x, y, radius, as fractions of size. */
+	double nozzles[2][3];
 };
 
-/* The leader is dead ahead, so you see it through the HUD glass. It sits
- * between two rungs of the pitch ladder, with its name off to one side,
- * to keep the symbols readable. */
-static const struct wingman formation[] = {
-	{ "TORNADO", draw_tornado, -262, 6, 74, false },
-	{ "LIGHTNING", draw_lightning, 262, 2, 64, false },
-	{ "TYPHOON", draw_typhoon, 0, -62, 70, true },
-};
-#define COUNT(array) ((int)(sizeof(array) / sizeof((array)[0])))
+static void draw_typhoon(cairo_t *cr, double s) {
+	use_grey_paint();
+	wings(cr, 0.14 * s, 0.045 * s, 1.00 * s, 0.105 * s, 0.050 * s);
+	stores(cr, 0.46 * s, 0.115 * s, 0.022 * s);
+	stores(cr, 0.72 * s, 0.120 * s, 0.018 * s);
+	stores(cr, 1.00 * s, 0.105 * s, 0.016 * s);                      /* wingtip pods */
+	wings(cr, 0.15 * s, -0.115 * s, 0.36 * s, -0.150 * s, 0.022 * s); /* canards */
+	fin(cr, -0.14 * s, -0.60 * s, 0.034 * s);
+	/* Fuselage, with the box of the chin intake underneath. */
+	cairo_rectangle(cr, -0.14 * s, 0.10 * s, 0.28 * s, 0.085 * s);
+	solid(cr, 0.10 * s, 0.185 * s, paint_under, paint_line);
+	rounded_rect(cr, -0.175 * s, -0.16 * s, 0.35 * s, 0.29 * s, 0.08 * s);
+	solid(cr, -0.16 * s, 0.13 * s, paint_top, paint_under);
+	canopy(cr, -0.165 * s, 0.062 * s, 0.045 * s);
+}
 
-static void draw_formation(cairo_t *cr, const struct layout *l,
-		const struct flight *f, double t) {
-	cairo_set_line_width(cr, HUD_LINE);
-	cairo_set_font_size(cr, 11);
-	for (int i = 0; i < COUNT(formation); i++) {
+static void draw_tornado(cairo_t *cr, double s) {
+	use_grey_paint();
+	wings(cr, 0.17 * s, 0.085 * s, 0.52 * s, 0.150 * s, 0.030 * s);   /* tailplanes */
+	wings(cr, 0.17 * s, -0.130 * s, 1.00 * s, -0.070 * s, 0.050 * s); /* wings, up high */
+	stores(cr, 0.40 * s, -0.045 * s, 0.040 * s);                      /* fuel tanks */
+	stores(cr, 0.68 * s, -0.050 * s, 0.020 * s);
+	fin(cr, -0.17 * s, -0.90 * s, 0.048 * s);
+	rounded_rect(cr, -0.195 * s, -0.19 * s, 0.39 * s, 0.38 * s, 0.06 * s);
+	solid(cr, -0.19 * s, 0.19 * s, paint_top, paint_under);
+	canopy(cr, -0.195 * s, 0.070 * s, 0.045 * s);
+}
+
+static void draw_lightning(cairo_t *cr, double s) {
+	use_metal_paint();
+	wings(cr, 0.13 * s, 0.270 * s, 0.47 * s, 0.305 * s, 0.028 * s);  /* tailplanes, low */
+	wings(cr, 0.14 * s, 0.010 * s, 1.00 * s, 0.090 * s, 0.050 * s);
+	fin(cr, -0.30 * s, -0.86 * s, 0.045 * s);
+	/* A tall, narrow fuselage: the two engines are one above the other. */
+	ellipse(cr, 0, 0, 0.165 * s, 0.335 * s);
+	solid(cr, -0.335 * s, 0.335 * s, paint_top, paint_under);
+	canopy(cr, -0.335 * s, 0.055 * s, 0.040 * s);
+}
+
+/* The leader is dead ahead, so you see it through the HUD glass. */
+static const struct wingman formation[AIRCRAFT_COUNT] = {
+	{ "TORNADO", draw_tornado, -262, 6, 78,
+		{ { -0.092, 0.025, 0.080 }, { 0.092, 0.025, 0.080 } } },
+	{ "LIGHTNING", draw_lightning, 262, 2, 66,
+		{ { 0, -0.135, 0.105 }, { 0, 0.135, 0.105 } } },
+	{ "TYPHOON", draw_typhoon, 0, -62, 74,
+		{ { -0.082, -0.015, 0.072 }, { 0.082, -0.015, 0.072 } } },
+};
+
+/* An aircraft's picture is this many half-wingspans wide and tall, with
+ * the aircraft's 0,0 at this point inside it. */
+#define SPRITE_WIDTH 2.3
+#define SPRITE_HEIGHT 1.8
+#define SPRITE_ORIGIN_X 1.15
+#define SPRITE_ORIGIN_Y 1.20
+
+/* Draw one aircraft into its own image, once, at full screen resolution.
+ * Each frame then only has to place the finished picture. */
+static cairo_surface_t *render_aircraft(const struct scene *scene,
+		const struct wingman *wingman) {
+	double s = wingman->size;
+	cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+		(int)ceil(SPRITE_WIDTH * s * scene->scale),
+		(int)ceil(SPRITE_HEIGHT * s * scene->scale));
+	cairo_t *cr = cairo_create(surface);
+	cairo_scale(cr, scene->scale, scene->scale);
+	cairo_translate(cr, SPRITE_ORIGIN_X * s, SPRITE_ORIGIN_Y * s);
+	cairo_set_line_width(cr, 0.8);
+	cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+	wingman->draw(cr, s);
+	for (int i = 0; i < 2; i++) {
+		nozzle(cr, wingman->nozzles[i][0] * s, wingman->nozzles[i][1] * s,
+			wingman->nozzles[i][2] * s);
+	}
+	cairo_destroy(cr);
+	return surface;
+}
+
+static void draw_formation(struct scene *scene, cairo_t *cr,
+		const struct layout *l, double t) {
+	for (int i = 0; i < AIRCRAFT_COUNT; i++) {
 		const struct wingman *wingman = &formation[i];
+		double s = wingman->size;
 		/* Each aircraft drifts slowly around its slot, out of step with
 		 * the others: formation flying is never perfectly still. */
 		double phase = i * 2.1;
 		double x = l->aim_x + wingman->offset_x + 9 * sin(t * 0.50 + phase);
 		double y = l->aim_y + wingman->offset_y + 6 * sin(t * 0.78 + phase * 1.7);
-		/* They bank with us in the turn, each a little late and a little
-		 * more or less, as it follows the leader. */
-		double bank = -f->roll * 0.6 + 2.0 * DEGREES * cos(t * 0.50 + phase);
-		/* The exhaust glow flickers. */
-		double glow = 0.42 + 0.14 * sin(t * 9 + phase * 3);
+		/* It banks a little towards the way it is drifting. */
+		double bank = 2.5 * DEGREES * cos(t * 0.50 + phase);
 
+		/* Move the origin to the aircraft and tilt it; from here on
+		 * 0,0 is the aircraft's centre. */
 		cairo_save(cr);
 		cairo_translate(cr, x, y);
 		cairo_rotate(cr, bank);
-		wingman->draw(cr, wingman->size, glow);
+
+		/* Place the cached picture. It was drawn in screen pixels, so
+		 * undo the design scale while painting it. */
+		cairo_save(cr);
+		cairo_scale(cr, 1 / scene->scale, 1 / scene->scale);
+		cairo_set_source_surface(cr, scene->aircraft[i],
+			-SPRITE_ORIGIN_X * s * scene->scale,
+			-SPRITE_ORIGIN_Y * s * scene->scale);
+		cairo_paint(cr);
 		cairo_restore(cr);
 
-		cairo_set_source_rgb(cr, HUD_DIM);
-		if (wingman->label_beside) {
-			draw_text(cr, wingman->name, x + 12, y - wingman->size * 0.52);
-		} else {
-			text_centred(cr, wingman->name, x, y + wingman->size * 0.5 + 12);
+		/* Exhaust glow: hot in the middle, fading out past the rim of
+		 * the nozzle, and flickering. This is the only part of the
+		 * aircraft that is drawn fresh each frame. */
+		double glow = 0.72 + 0.20 * sin(t * 9 + phase * 3);
+		for (int n = 0; n < 2; n++) {
+			double nx = wingman->nozzles[n][0] * s;
+			double ny = wingman->nozzles[n][1] * s;
+			double radius = wingman->nozzles[n][2] * s * 1.5;
+			cairo_pattern_t *flame = cairo_pattern_create_radial(
+				nx, ny, 0, nx, ny, radius);
+			cairo_pattern_add_color_stop_rgba(flame, 0.0, 1.0, 0.93, 0.70, glow);
+			cairo_pattern_add_color_stop_rgba(flame, 0.45, 1.0, 0.55, 0.15, glow * 0.75);
+			cairo_pattern_add_color_stop_rgba(flame, 1.0, 1.0, 0.30, 0.05, 0.0);
+			cairo_set_source(cr, flame);
+			circle(cr, nx, ny, radius);
+			cairo_fill(cr);
+			cairo_pattern_destroy(flame);
 		}
+		cairo_restore(cr);
 	}
 }
 
-/* ---- HUD ---- */
-
-/* The HUD's frame: two posts rising from the panel, and the glass they
- * hold. The glass is only an outline: you look through it. */
-static void draw_hud_frame(cairo_t *cr, const struct layout *lp) {
-	struct layout l = *lp;
-	cairo_set_source_rgb(cr, HUD_DIM);
-	cairo_set_line_width(cr, 3);
-	line(cr, l.hud_x, l.hud_y + 26, l.hud_x - 10, l.panel_top);
-	line(cr, l.hud_x + l.hud_w, l.hud_y + 26, l.hud_x + l.hud_w + 10,
-		l.panel_top);
-	rounded_rect(cr, l.hud_x, l.hud_y, l.hud_w, l.hud_h, 26);
-	cairo_set_line_width(cr, HUD_LINE);
-	cairo_stroke(cr);
-}
-
-/* The symbols projected on the glass. */
+/* ---- HUD symbology, drawn on the glass ---- */
 
 static void draw_hud(cairo_t *cr, const struct layout *l,
 		const struct flight *f) {
@@ -417,20 +424,25 @@ static void draw_hud(cairo_t *cr, const struct layout *l,
 		l->panel_top - l->hud_y - 8);
 	cairo_clip(cr);
 
+	/* The glass is slightly smoked, which is what lets bright green
+	 * symbols stand out against a bright sky. */
+	cairo_set_source_rgba(cr, 0.00, 0.10, 0.05, 0.42);
+	cairo_paint(cr);
+
 	cairo_set_source_rgb(cr, HUD_GREEN);
 	cairo_set_line_width(cr, HUD_LINE);
 	cairo_set_font_size(cr, 11);
 
-	/* Pitch ladder: a rung every 5 degrees, in world coordinates so it
-	 * stays parallel to the real horizon as the aircraft rolls. Above the
+	/* Pitch ladder: a rung every 5 degrees, measured from the horizon,
+	 * so it moves up and down with the real horizon outside. Above the
 	 * horizon rungs are solid, below they are dashed. */
-	enter_world(cr, l, f);
+	double horizon = l->aim_y + f->pitch;
 	const double rung_spacing = 46;
 	for (int step = -2; step <= 2; step++) {
-		double y = -step * rung_spacing;
+		double y = horizon - step * rung_spacing;
 		if (step == 0) {
-			line(cr, -118, 0, -30, 0); /* the horizon bar */
-			line(cr, 30, 0, 118, 0);
+			line(cr, l->cx - 118, y, l->cx - 30, y); /* the horizon bar */
+			line(cr, l->cx + 30, y, l->cx + 118, y);
 			continue;
 		}
 		double tick = step > 0 ? 6 : -6;
@@ -438,17 +450,16 @@ static void draw_hud(cairo_t *cr, const struct layout *l,
 			const double dashes[] = {7, 5};
 			cairo_set_dash(cr, dashes, 2, 0);
 		}
-		line(cr, -82, y, -30, y);
-		line(cr, 30, y, 82, y);
+		line(cr, l->cx - 82, y, l->cx - 30, y);
+		line(cr, l->cx + 30, y, l->cx + 82, y);
 		cairo_set_dash(cr, NULL, 0, 0);
-		line(cr, -82, y, -82, y + tick);
-		line(cr, 82, y, 82, y + tick);
+		line(cr, l->cx - 82, y, l->cx - 82, y + tick);
+		line(cr, l->cx + 82, y, l->cx + 82, y + tick);
 		char label[8];
 		snprintf(label, sizeof(label), "%d", step * 5);
-		draw_text(cr, label, -88 - text_width(cr, label), y);
-		draw_text(cr, label, 88, y);
+		draw_text(cr, label, l->cx - 88 - text_width(cr, label), y);
+		draw_text(cr, label, l->cx + 88, y);
 	}
-	cairo_restore(cr);
 
 	/* Flight path marker: fixed on the glass, where the aircraft is
 	 * going. A small circle with wings and a fin. */
@@ -460,12 +471,12 @@ static void draw_hud(cairo_t *cr, const struct layout *l,
 
 	/* Heading tape along the top of the glass: a tick every 2 degrees,
 	 * sliding under a fixed caret. */
-	const double pixels_per_degree = 5, half_width = 112;
+	const double units_per_degree = 5, half_width = 112;
 	double tape_y = l->hud_y + 30;
-	int first = (int)floor(f->heading - half_width / pixels_per_degree);
-	int last = (int)ceil(f->heading + half_width / pixels_per_degree);
+	int first = (int)floor(f->heading - half_width / units_per_degree);
+	int last = (int)ceil(f->heading + half_width / units_per_degree);
 	for (int degree = first; degree <= last; degree++) {
-		double x = l->cx + (degree - f->heading) * pixels_per_degree;
+		double x = l->cx + (degree - f->heading) * units_per_degree;
 		if (degree % 2 != 0 || fabs(x - l->cx) > half_width) {
 			continue;
 		}
@@ -496,6 +507,10 @@ static void draw_hud(cairo_t *cr, const struct layout *l,
 	cairo_rectangle(cr, l->hud_x + l->hud_w - 66, l->aim_y - 11, 54, 22);
 	cairo_stroke(cr);
 	text_centred(cr, value, l->hud_x + l->hud_w - 39, l->aim_y);
+
+	/* The aircraft you are following, as a HUD would tag it. */
+	cairo_set_font_size(cr, 10);
+	draw_text(cr, "LEAD  TYPHOON", l->hud_x + 14, l->hud_y + 62);
 
 	cairo_restore(cr);
 }
@@ -540,7 +555,7 @@ static void draw_radar(struct scene *scene, cairo_t *cr,
 
 	/* The contacts. */
 	scene->hover_pid = 0;
-	double nearest = 11; /* pixels: how close the pointer has to be */
+	double nearest = 11; /* how close the pointer has to be */
 	for (int i = 0; i < list->count; i++) {
 		struct process *process = &list->items[i];
 		double bearing = process_bearing(process);
@@ -700,23 +715,26 @@ static void draw_key(cairo_t *cr, const struct layout *l, int index,
 		bool lit) {
 	double x, y;
 	key_position(l, index, &x, &y);
+	/* A dark surround, as if the key sits in a hole in the panel. */
+	rounded_rect(cr, x - 2, y - 2, KEY_WIDTH + 4, KEY_HEIGHT + 4, 7);
+	set_colour(cr, metal_black);
+	cairo_fill(cr);
+
 	rounded_rect(cr, x + 0.5, y + 0.5, KEY_WIDTH - 1, KEY_HEIGHT - 1, 5);
 	if (lit) {
+		/* Pressed-in and backlit. */
 		cairo_set_source_rgb(cr, HUD_GREEN);
 		cairo_fill(cr);
 		cairo_set_source_rgb(cr, HUD_BLACK);
 	} else {
-		/* A raised button: lighter than the panel, a bright edge, and a
-		 * faint highlight along the top as if lit from above. */
-		cairo_set_source_rgb(cr, 0.035, 0.115, 0.058);
-		cairo_fill_preserve(cr);
-		cairo_set_source_rgb(cr, HUD_DIM);
-		cairo_set_line_width(cr, HUD_LINE);
-		cairo_stroke(cr);
-		cairo_set_source_rgba(cr, HUD_GREEN, 0.35);
+		/* A raised plastic key cap: lighter at the top where the light
+		 * catches it, with a bright line along the top edge. */
+		set_shading(cr, y, y + KEY_HEIGHT, metal_mid, metal_dark);
+		cairo_fill(cr);
+		set_colour(cr, metal_light);
 		cairo_set_line_width(cr, 1);
-		line(cr, x + 7, y + 3.5, x + KEY_WIDTH - 7, y + 3.5);
-		cairo_set_source_rgb(cr, HUD_GREEN);
+		line(cr, x + 6, y + 1.5, x + KEY_WIDTH - 6, y + 1.5);
+		cairo_set_source_rgb(cr, HUD_GREEN); /* the legend is backlit */
 	}
 	cairo_set_font_size(cr, 13);
 	text_centred(cr, key_label(index), x + KEY_WIDTH / 2.0,
@@ -742,26 +760,29 @@ static void draw_screen(cairo_t *cr, const char *title, double cx, double cy,
 		bool rwr) {
 	double half = SCREEN_SIZE / 2.0;
 
-	/* Bezel: a frame with a row of small unlabelled buttons above and
-	 * below, like the soft keys round a real multi-function display. */
-	rounded_rect(cr, cx - half - 9, cy - half - 9, SCREEN_SIZE + 18,
-		SCREEN_SIZE + 18, 8);
-	cairo_set_source_rgb(cr, 0.030, 0.100, 0.050);
+	/* Bezel: a metal frame with a row of small buttons above and below,
+	 * like the soft keys round a real multi-function display. */
+	rounded_rect(cr, cx - half - 11, cy - half - 11, SCREEN_SIZE + 22,
+		SCREEN_SIZE + 22, 9);
+	set_shading(cr, cy - half - 11, cy + half + 11, metal_mid, metal_dark);
 	cairo_fill_preserve(cr);
-	cairo_set_source_rgb(cr, HUD_DIM);
-	cairo_set_line_width(cr, HUD_LINE);
+	set_colour(cr, metal_black);
+	cairo_set_line_width(cr, 1.5);
 	cairo_stroke(cr);
-	cairo_set_source_rgb(cr, HUD_DIM);
+	set_colour(cr, metal_light);
+	cairo_set_line_width(cr, 1);
+	line(cr, cx - half - 4, cy - half - 10, cx + half + 4, cy - half - 10);
 	for (int i = 0; i < 5; i++) {
 		double x = cx - half + 14 + i * 33;
-		cairo_rectangle(cr, x, cy - half - 7, 16, 4);
-		cairo_rectangle(cr, x, cy + half + 3, 16, 4);
+		cairo_rectangle(cr, x, cy - half - 8, 16, 5);
+		cairo_rectangle(cr, x, cy + half + 3, 16, 5);
 	}
+	set_colour(cr, metal_light);
 	cairo_fill(cr);
 
 	/* The glass. */
 	cairo_rectangle(cr, cx - half, cy - half, SCREEN_SIZE, SCREEN_SIZE);
-	cairo_set_source_rgb(cr, HUD_BLACK);
+	set_colour(cr, glass_black);
 	cairo_fill(cr);
 
 	circle(cr, cx, cy, SCOPE_RADIUS);
@@ -803,25 +824,68 @@ static void draw_screen(cairo_t *cr, const char *title, double cx, double cy,
 
 static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 	struct layout l = layout_for(scene);
-	int w = scene->width, h = scene->height;
+	double w = l.width, h = DESIGN_HEIGHT;
 
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_NORMAL);
 
-	/* Canopy frame: you look out through a big oval of perspex. Everything
-	 * outside the oval is frame. EVEN_ODD makes the oval a hole in the
-	 * rectangle, so only the corners get filled. */
-	double oval_x = l.cx, oval_y = h * 0.73;
-	double oval_rx = w * 0.742, oval_ry = h * 0.807;
-	cairo_rectangle(cr, 0, 0, w, h);
-	ellipse(cr, oval_x, oval_y, oval_rx, oval_ry);
-	cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
-	cairo_set_source_rgb(cr, 0.012, 0.045, 0.022);
-	cairo_fill(cr);
-	cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING);
-	ellipse(cr, oval_x, oval_y, oval_rx, oval_ry);
-	cairo_set_source_rgb(cr, HUD_DIM);
-	cairo_set_line_width(cr, 2);
+	/* Canopy arch: the hoop of the windscreen frame, rising from either
+	 * side of the panel and meeting overhead. It is a wide stroke along
+	 * an ellipse, drawn three times: a dark edge, a lighter face, and a
+	 * thin highlight where the light catches its inner rim. */
+	double arch_x = l.cx, arch_y = h * 1.02;
+	double arch_rx = w * 0.47, arch_ry = h * 1.0;
+	ellipse(cr, arch_x, arch_y, arch_rx, arch_ry);
+	set_colour(cr, metal_black);
+	cairo_set_line_width(cr, 46);
+	cairo_stroke(cr);
+	ellipse(cr, arch_x, arch_y, arch_rx, arch_ry);
+	set_colour(cr, metal_dark);
+	cairo_set_line_width(cr, 38);
+	cairo_stroke(cr);
+	ellipse(cr, arch_x, arch_y, arch_rx + 4, arch_ry + 4);
+	set_colour(cr, metal_mid);
+	cairo_set_line_width(cr, 18);
+	cairo_stroke(cr);
+	ellipse(cr, arch_x, arch_y, arch_rx - 17, arch_ry - 17);
+	set_colour(cr, metal_light);
+	cairo_set_line_width(cr, 1.5);
+	cairo_stroke(cr);
+
+	/* Cockpit sills: the sides of the cockpit rising at the left and
+	 * right edges. */
+	for (int side = -1; side <= 1; side += 2) {
+		double edge = side < 0 ? 0 : w;
+		cairo_move_to(cr, edge, l.panel_top - 130);
+		cairo_line_to(cr, edge - side * 64, l.panel_top - 74);
+		cairo_line_to(cr, edge - side * 128, l.panel_top + 18);
+		cairo_line_to(cr, edge, l.panel_top + 18);
+		cairo_close_path(cr);
+		set_shading(cr, l.panel_top - 130, l.panel_top + 18,
+			metal_mid, metal_black);
+		cairo_fill(cr);
+		set_colour(cr, metal_light);
+		cairo_set_line_width(cr, 1.5);
+		cairo_move_to(cr, edge, l.panel_top - 130);
+		cairo_line_to(cr, edge - side * 64, l.panel_top - 74);
+		cairo_line_to(cr, edge - side * 128, l.panel_top + 18);
+		cairo_stroke(cr);
+	}
+
+	/* HUD: two posts and the frame of the glass they hold. The glass
+	 * itself is not drawn here: you look through it. */
+	set_colour(cr, metal_black);
+	cairo_set_line_width(cr, 5);
+	line(cr, l.hud_x, l.hud_y + 26, l.hud_x - 10, l.panel_top);
+	line(cr, l.hud_x + l.hud_w, l.hud_y + 26, l.hud_x + l.hud_w + 10,
+		l.panel_top);
+	rounded_rect(cr, l.hud_x, l.hud_y, l.hud_w, l.hud_h, 26);
+	set_colour(cr, metal_black);
+	cairo_set_line_width(cr, 5);
+	cairo_stroke(cr);
+	rounded_rect(cr, l.hud_x, l.hud_y, l.hud_w, l.hud_h, 26);
+	set_colour(cr, metal_mid);
+	cairo_set_line_width(cr, 1.5);
 	cairo_stroke(cr);
 
 	/* Instrument panel. Its top edge (the glareshield) rises in the
@@ -834,31 +898,56 @@ static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 	cairo_line_to(cr, w, h);
 	cairo_line_to(cr, 0, h);
 	cairo_close_path(cr);
-	cairo_set_source_rgb(cr, 0.016, 0.058, 0.029);
-	cairo_fill_preserve(cr);
-	cairo_set_source_rgb(cr, HUD_DIM);
+	set_shading(cr, l.panel_top - 8, h,
+		(struct colour){ 0.19, 0.20, 0.22 }, (struct colour){ 0.085, 0.09, 0.10 });
+	cairo_fill(cr);
+	/* The padded lip of the glareshield catches the light. */
+	cairo_move_to(cr, 0, l.panel_top + 16);
+	cairo_curve_to(cr, w * 0.25, l.panel_top + 12, w * 0.30, l.panel_top - 8,
+		l.cx, l.panel_top - 8);
+	cairo_curve_to(cr, w * 0.70, l.panel_top - 8, w * 0.75, l.panel_top + 12,
+		w, l.panel_top + 16);
+	set_colour(cr, metal_light);
 	cairo_set_line_width(cr, 2);
 	cairo_stroke(cr);
+
+	/* The HUD projector housing, on top of the glareshield. */
+	rounded_rect(cr, l.cx - 78, l.panel_top - 20, 156, 34, 6);
+	set_shading(cr, l.panel_top - 20, l.panel_top + 14, metal_mid, metal_black);
+	cairo_fill(cr);
+	rounded_rect(cr, l.cx - 52, l.panel_top - 13, 104, 12, 4);
+	cairo_set_source_rgb(cr, 0.02, 0.16, 0.08); /* the projector lens */
+	cairo_fill(cr);
 
 	draw_screen(cr, "RADAR", l.radar_x, l.scope_y, false);
 	draw_screen(cr, "RWR", l.rwr_x, l.scope_y, true);
 
-	/* Keys, with a caption over the group. */
+	/* Keys, with an engraved caption over the group. */
 	cairo_set_font_size(cr, 11);
-	cairo_set_source_rgb(cr, HUD_DIM);
+	set_colour(cr, metal_light);
 	text_centred(cr, "SYSTEMS", l.cx, l.keys_y - 12);
 	for (int i = 0; i < KEY_COUNT; i++) {
 		draw_key(cr, &l, i, false);
 	}
 
-	/* The data display: a recessed dark window. */
+	/* The data display: a small screen with a metal surround. */
+	rounded_rect(cr, l.data_x - 5, l.data_y - 5, l.data_w + 10,
+		l.data_h + 10, 7);
+	set_shading(cr, l.data_y - 5, l.data_y + l.data_h + 5, metal_mid, metal_dark);
+	cairo_fill(cr);
 	rounded_rect(cr, l.data_x + 0.5, l.data_y + 0.5, l.data_w - 1,
-		l.data_h - 1, 4);
-	cairo_set_source_rgb(cr, HUD_BLACK);
-	cairo_fill_preserve(cr);
-	cairo_set_source_rgb(cr, HUD_DIM);
-	cairo_set_line_width(cr, HUD_LINE);
-	cairo_stroke(cr);
+		l.data_h - 1, 3);
+	set_colour(cr, glass_black);
+	cairo_fill(cr);
+
+	/* A screw in each corner of the centre panel. */
+	set_colour(cr, metal_light);
+	for (int i = 0; i < 4; i++) {
+		double x = (i % 2 == 0) ? l.keys_x - 22 : l.keys_x + l.data_w + 22;
+		double y = (i < 2) ? l.keys_y - 16 : l.data_y + l.data_h + 2;
+		circle(cr, x, y, 3);
+		cairo_fill(cr);
+	}
 }
 
 /* ---- public functions (see wallpaper.h) ---- */
@@ -867,20 +956,39 @@ void scene_init(struct scene *scene, int width, int height) {
 	scene_finish(scene);
 	scene->width = width;
 	scene->height = height;
+	scene->scale = height / DESIGN_HEIGHT;
 	scene->hover_key = -1;
+	sky_init();
 
 	/* ARGB32: has an alpha channel, so the window part stays see-through. */
 	scene->cockpit = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
 		width, height);
 	cairo_t *cr = cairo_create(scene->cockpit);
+	cairo_scale(cr, scene->scale, scene->scale);
 	draw_cockpit(scene, cr);
 	cairo_destroy(cr);
+	cairo_surface_flush(scene->cockpit);
+	scene->cockpit_overlay = overlay_create(
+		(const uint32_t *)cairo_image_surface_get_data(scene->cockpit),
+		cairo_image_surface_get_stride(scene->cockpit) / 4, width, height);
+
+	for (int i = 0; i < AIRCRAFT_COUNT; i++) {
+		scene->aircraft[i] = render_aircraft(scene, &formation[i]);
+	}
 }
 
 void scene_finish(struct scene *scene) {
+	overlay_destroy(scene->cockpit_overlay);
+	scene->cockpit_overlay = NULL;
 	if (scene->cockpit != NULL) {
 		cairo_surface_destroy(scene->cockpit);
 		scene->cockpit = NULL;
+	}
+	for (int i = 0; i < AIRCRAFT_COUNT; i++) {
+		if (scene->aircraft[i] != NULL) {
+			cairo_surface_destroy(scene->aircraft[i]);
+			scene->aircraft[i] = NULL;
+		}
 	}
 }
 
@@ -889,45 +997,42 @@ void scene_draw(struct scene *scene, cairo_t *cr, double t) {
 	struct flight f = flight_at(t);
 	processes_update(&scene->processes, t);
 
+	/* The frame's raw pixels, for the two steps that bypass cairo.
+	 * flush = "cairo, finish anything you have pending before I touch the
+	 * memory"; mark_dirty = "I changed the memory behind your back". */
+	cairo_surface_t *frame = cairo_get_target(cr);
+	uint32_t *pixels = (uint32_t *)cairo_image_surface_get_data(frame);
+	int stride_pixels = cairo_image_surface_get_stride(frame) / 4;
+
+	/* 1. Outside. Only the part above the instrument panel shows it. */
+	struct sky_view view = {
+		.width = scene->width,
+		.rows = (int)((l.panel_top + 20) * scene->scale),
+		.horizon = (l.aim_y + f.pitch) * scene->scale,
+		.pan = (f.heading - 360) * 16 * scene->scale,
+		.time = t,
+		.scale = scene->scale,
+	};
+	cairo_surface_flush(frame);
+	sky_render(pixels, stride_pixels, &view);
+	cairo_surface_mark_dirty(frame);
+
+	/* From here on, draw in design units. */
+	cairo_save(cr);
+	cairo_scale(cr, scene->scale, scene->scale);
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_NORMAL);
 
-	/* Only the part above the instrument panel shows the outside, so
-	 * don't spend time drawing sky that the panel will cover. */
-	cairo_save(cr);
-	cairo_rectangle(cr, 0, 0, scene->width, l.panel_top + 18);
-	/* Antialiasing a clip edge that is already on the pixel grid costs
-	 * time and changes nothing. */
-	cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
-	cairo_clip(cr);
-	cairo_set_antialias(cr, CAIRO_ANTIALIAS_DEFAULT);
-	draw_outside(scene, cr, &l, &f, t);
-	draw_formation(cr, &l, &f, t);
+	/* 2. Aircraft and HUD symbols. */
+	draw_formation(scene, cr, &l, t);
 	draw_hud(cr, &l, &f);
-	cairo_restore(cr);
 
-	draw_hud_frame(cr, &l);
+	/* 3. The cached cockpit over the top. */
+	cairo_surface_flush(frame);
+	overlay_blit(scene->cockpit_overlay, pixels, stride_pixels);
+	cairo_surface_mark_dirty(frame);
 
-	/* Lay the cached cockpit over the frame. Blending a full-screen image
-	 * every frame is the single most expensive thing we could do, and
-	 * most of it would be blending nothing (the window) or something
-	 * opaque (the panel). So do it in three pieces:
-	 *   - the two top corners, where the canopy frame is: blend
-	 *   - a strip along the panel's curved top edge: blend
-	 *   - the rest of the panel: plain copy (SOURCE), no blending */
-	double strip_top = l.panel_top - 12, strip_bottom = l.panel_top + 18;
-	cairo_set_source_surface(cr, scene->cockpit, 0, 0);
-	cairo_rectangle(cr, 0, 0, 200, 120);
-	cairo_rectangle(cr, scene->width - 200, 0, 200, 120);
-	cairo_rectangle(cr, 0, strip_top, scene->width, strip_bottom - strip_top);
-	cairo_fill(cr);
-	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-	cairo_rectangle(cr, 0, strip_bottom, scene->width,
-		scene->height - strip_bottom);
-	cairo_fill(cr);
-	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-
-	/* The live parts of the panel. */
+	/* 4. The live parts of the panel. */
 	draw_radar(scene, cr, &l, t);
 	int threats = draw_rwr(scene, cr, &l);
 	draw_data_display(scene, cr, &l, threats);
@@ -937,12 +1042,17 @@ void scene_draw(struct scene *scene, cairo_t *cr, double t) {
 	if (scene->hover_key >= 0) {
 		draw_key(cr, &l, scene->hover_key, true);
 	}
+	cairo_restore(cr);
 }
 
 void scene_pointer_motion(struct scene *scene, double x, double y) {
-	scene->pointer_x = x;
-	scene->pointer_y = y;
-	scene->pointer_inside = true;
+	/* The compositor reports screen pixels; everything here works in
+	 * design units. */
+	if (scene->scale > 0) {
+		scene->pointer_x = x / scene->scale;
+		scene->pointer_y = y / scene->scale;
+		scene->pointer_inside = true;
+	}
 }
 
 void scene_pointer_leave(struct scene *scene) {
