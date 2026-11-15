@@ -37,26 +37,26 @@ void processes_update(struct process_list *list, double now);
 
 /* ---- scene.c: the picture ---- */
 
-#define CLOUD_COUNT 9
-
 struct scene {
 	int width, height;
 
-	/* Things that never change are drawn once into `background`; each
-	 * frame starts by copying it. Clouds are pre-drawn sprites that are
-	 * only moved. Both exist to keep the per-frame work small, because
-	 * all drawing here is done by the CPU. */
-	cairo_surface_t *background;
-	cairo_surface_t *clouds[CLOUD_COUNT];
+	/* The cockpit itself (canopy frame, instrument panel, screen bezels,
+	 * keys) never changes, so it is drawn once into `cockpit`, an image
+	 * that is transparent where you look out of the window. Each frame
+	 * draws the outside world and then lays this on top. It exists to
+	 * keep the per-frame work small: all drawing here is done by the CPU. */
+	cairo_surface_t *cockpit;
 
 	struct process_list processes;
 
 	/* The mouse. hover_pid is the radar contact under the pointer and
-	 * locked_pid the one that was clicked; 0 means none. */
+	 * locked_pid the one that was clicked; 0 means none. hover_key is the
+	 * cockpit key under the pointer, or -1. */
 	double pointer_x, pointer_y;
 	bool pointer_inside;
 	int hover_pid;
 	int locked_pid;
+	int hover_key;
 };
 
 /* Prepare the cached drawings for a width x height screen. */
