@@ -55,6 +55,31 @@ if grep -aq '^compositor=perkinsos' "$LOG"; then
 	count closed foot
 	grep -aq "^closed=$BEFORE" "$LOG" || fail "Alt+Q did not close the focused window"
 	echo "ok: Alt+Q closed the focused window"
+
+	# Layer-shell: the protocol is advertised, and the dock is using it.
+	send 'echo layershell=$(wayland-info | grep -c zwlr_layer_shell_v1)'
+	wait_for '^layershell='
+	grep -aq '^layershell=1' "$LOG" || fail "compositor does not advertise layer-shell"
+	echo "ok: compositor advertises zwlr_layer_shell_v1"
+
+	# Launcher: Alt+P opens it, typing filters, Enter starts the app.
+	press alt-p
+	count launcher perkinsos-launcher
+	grep -aq '^launcher=1' "$LOG" || fail "Alt+P did not open the launcher"
+	press s; press y; press s
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/launcher-test.png > /dev/null
+	press ret
+	count app perkinsos-sysinfo
+	grep -aq '^app=1' "$LOG" || fail "launcher did not start System Info"
+	count launchergone perkinsos-launcher
+	grep -aq '^launchergone=0' "$LOG" || fail "launcher did not exit after launching"
+	echo "ok: launcher opened with Alt+P, filtered on 'sys' and started System Info"
+
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/app-test.png > /dev/null
+	press alt-q
+	count appclosed perkinsos-sysinfo
+	grep -aq '^appclosed=0' "$LOG" || fail "Alt+Q did not close System Info"
+	echo "ok: System Info closed on request"
 fi
 
 stop_vm

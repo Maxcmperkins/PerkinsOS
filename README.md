@@ -58,8 +58,8 @@ docs/         plan, setup, architecture, week-by-week guides
 - [x] Week 3: compositor made my own
 - [x] Week 4: layer-shell protocol
 - [x] Week 5: dock
-- [ ] Week 6: launcher + first app
-- [ ] Week 7: boot to desktop + CI
+- [x] Week 6: launcher + first app
+- [x] Week 7: boot to desktop + CI
 - [ ] Week 8: polish + write-up
 
 ## Later (not now)
