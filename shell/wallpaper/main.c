@@ -1,261 +1,119 @@
 /*
- * perkinsos-wallpaper: the desktop background, drawn as the view through a
- * fighter jet's head-up display: horizon and pitch ladder, heading tape,
- * speed and altitude boxes, and plan-view outlines of three aircraft.
+ * perkinsos-wallpaper: the animated desktop background. Three jets in
+ * formation over drifting cloud, a heading tape, and a radar and RWR that
+ * show the machine's running programs. What is drawn lives in scene.c;
+ * this file is the conversation with the compositor.
  *
  * It is a layer-shell client like the dock, on the "background" layer and
  * anchored to all four edges, so the compositor gives it the whole screen
- * and stacks it behind every window. Nothing moves, so it draws once per
- * configure and then just sleeps in the event loop.
+ * and stacks it behind every window.
  *
- * Everything is drawn with cairo paths: there is no image file, and it is
- * sharp at any screen size.
+ * Compared with the dock, three things are new because this one animates:
+ *
+ *   Frame callbacks. We never draw on a timer of our own. After each frame
+ *   we ask the compositor "tell me when it's a good time to draw the next
+ *   one" (wl_surface.frame). It answers once per screen refresh, and only
+ *   while the surface is visible, so a wallpaper hidden behind a
+ *   maximized window stops drawing and costs nothing.
+ *
+ *   A frame-rate cap. Every pixel here is drawn by the CPU, so drawing at
+ *   the screen's full refresh rate would waste it. We skip callbacks until
+ *   1/FRAMES_PER_SECOND has passed.
+ *
+ *   Two buffers. The compositor may still be reading the buffer we last
+ *   gave it, so we draw the next frame into the other one and swap.
  */
-#include <math.h>
+#include <linux/input-event-codes.h> /* BTN_LEFT */
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "client.h"
 #include "theme.h"
+#include "wallpaper.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
+
+#define FRAMES_PER_SECOND 12
 
 struct wallpaper {
 	struct wl_display *display;
 	struct wl_compositor *compositor;
 	struct wl_shm *shm;
 	struct zwlr_layer_shell_v1 *layer_shell;
+	struct wl_seat *seat;
+	struct wl_pointer *pointer;
 
 	struct wl_surface *surface;
 	struct zwlr_layer_surface_v1 *layer_surface;
-	struct buffer *buffer;
+	struct buffer *buffers[2];
+	int next_buffer;          /* which of the two to draw into next */
 	int width, height;
+
+	struct scene scene;
+	double started_at;        /* clock reading when we started */
+	double last_frame_at;     /* when the last frame was drawn */
+	bool frame_requested;     /* waiting for the compositor's go-ahead */
 	bool running;
 };
 
-/* ---- aircraft outlines ----
- *
- * Each aircraft is the right-hand half of its outline seen from above, nose
- * up, as x,y pairs. x runs 0 (centreline) to 1 (about half a wingspan);
- * y runs -1 (nose) to +1 (tail). The left half is the mirror image, so the
- * drawing code walks the points forwards and then backwards with x negated.
- */
-struct aircraft {
-	const char *name;
-	const char *role;
-	int point_count;
-	const double (*points)[2];
-};
-
-/* Eurofighter Typhoon: canards by the cockpit, one big cropped delta wing. */
-static const double typhoon_points[][2] = {
-	{0.00, -1.00}, {0.05, -0.80}, {0.09, -0.60},
-	{0.30, -0.50}, {0.32, -0.43}, {0.10, -0.42}, /* canard */
-	{0.13, -0.24},
-	{0.72, 0.50}, {0.72, 0.62},                  /* wing tip */
-	{0.17, 0.68}, {0.14, 0.94}, {0.00, 0.94},    /* trailing edge, nozzles */
-};
-
-/* Panavia Tornado: swing wings (drawn swept forward) and a big tailplane. */
-static const double tornado_points[][2] = {
-	{0.00, -1.00}, {0.06, -0.78}, {0.13, -0.42},
-	{0.24, -0.26},                               /* wing glove */
-	{0.96, 0.06}, {0.96, 0.16},                  /* wing tip */
-	{0.26, 0.10}, {0.19, 0.42},
-	{0.54, 0.74}, {0.54, 0.85},                  /* tailplane tip */
-	{0.17, 0.80}, {0.13, 0.96}, {0.00, 0.96},
-};
-
-/* English Electric Lightning: blunt nose intake, sharply swept wings with
- * the trailing edge notched out, and a matching swept tailplane. */
-static const double lightning_points[][2] = {
-	{0.00, -1.00}, {0.09, -0.97}, {0.12, -0.34},
-	{0.70, 0.40}, {0.70, 0.54},                  /* wing tip */
-	{0.12, 0.20}, {0.12, 0.56},
-	{0.44, 0.86}, {0.44, 0.96},                  /* tailplane tip */
-	{0.12, 0.82}, {0.10, 1.00}, {0.00, 1.00},
-};
-
-#define COUNT(array) ((int)(sizeof(array) / sizeof((array)[0])))
-static const struct aircraft fleet[] = {
-	{ "TORNADO", "GR4", COUNT(tornado_points), tornado_points },
-	{ "TYPHOON", "FGR4", COUNT(typhoon_points), typhoon_points },
-	{ "LIGHTNING", "F.6", COUNT(lightning_points), lightning_points },
-};
-
-/* Draw one aircraft centred on cx,cy; `size` is half its length in pixels. */
-static void draw_aircraft(cairo_t *cr, const struct aircraft *aircraft,
-		double cx, double cy, double size) {
-	/* Right half nose to tail, then left half tail to nose. */
-	cairo_new_path(cr);
-	for (int i = 0; i < aircraft->point_count; i++) {
-		cairo_line_to(cr, cx + aircraft->points[i][0] * size,
-			cy + aircraft->points[i][1] * size);
-	}
-	for (int i = aircraft->point_count - 1; i >= 0; i--) {
-		cairo_line_to(cr, cx - aircraft->points[i][0] * size,
-			cy + aircraft->points[i][1] * size);
-	}
-	cairo_close_path(cr);
-	/* fill_preserve keeps the path so the same shape can be outlined. */
-	cairo_set_source_rgb(cr, HUD_FAINT);
-	cairo_fill_preserve(cr);
-	cairo_set_source_rgb(cr, HUD_GREEN);
-	cairo_set_line_width(cr, HUD_LINE);
-	cairo_stroke(cr);
-
-	/* Name and mark underneath, centred. */
-	cairo_set_font_size(cr, 13);
-	cairo_set_source_rgb(cr, HUD_GREEN);
-	draw_text(cr, aircraft->name,
-		cx - text_width(cr, aircraft->name) / 2, cy + size + 18);
-	cairo_set_font_size(cr, 11);
-	cairo_set_source_rgb(cr, HUD_DIM);
-	draw_text(cr, aircraft->role,
-		cx - text_width(cr, aircraft->role) / 2, cy + size + 34);
+/* Seconds on a clock that only ever goes forwards (unlike the wall clock,
+ * which jumps when the time is set). */
+static double now_seconds(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec + ts.tv_nsec / 1e9;
 }
 
-/* A straight line from x1,y1 to x2,y2 in the current colour. */
-static void line(cairo_t *cr, double x1, double y1, double x2, double y2) {
-	cairo_move_to(cr, x1, y1);
-	cairo_line_to(cr, x2, y2);
-	cairo_stroke(cr);
+static void draw(struct wallpaper *wallpaper);
+
+/* ---- frame callback ---- */
+
+static void frame_done(void *data, struct wl_callback *callback,
+		uint32_t time) {
+	/* The compositor has shown our last frame and is ready for another.
+	 * A callback object fires once, so destroy it; draw() asks for a new
+	 * one each time. */
+	struct wallpaper *wallpaper = data;
+	wl_callback_destroy(callback);
+	wallpaper->frame_requested = false;
 }
 
-/* A boxed read-out with a small caption above it (speed, altitude). */
-static void readout(cairo_t *cr, const char *caption, const char *value,
-		double x, double y) {
-	const double w = 86, h = 30;
-	cairo_set_font_size(cr, 11);
-	cairo_set_source_rgb(cr, HUD_DIM);
-	draw_text(cr, caption, x, y - 10);
-	cairo_set_source_rgb(cr, HUD_GREEN);
-	cairo_rectangle(cr, x, y, w, h);
-	cairo_stroke(cr);
-	cairo_set_font_size(cr, 16);
-	draw_text(cr, value, x + (w - text_width(cr, value)) / 2, y + h / 2);
-}
+static const struct wl_callback_listener frame_listener = {
+	.done = frame_done,
+};
 
 static void draw(struct wallpaper *wallpaper) {
 	int w = wallpaper->width, h = wallpaper->height;
 	if (w == 0 || h == 0) {
-		return;
+		return; /* not configured yet */
 	}
-	if (wallpaper->buffer == NULL || wallpaper->buffer->width != w ||
-			wallpaper->buffer->height != h) {
-		buffer_destroy(wallpaper->buffer);
-		wallpaper->buffer = buffer_create(wallpaper->shm, w, h);
-		if (wallpaper->buffer == NULL) {
+	/* Pick the buffer the compositor is not showing, and make sure it is
+	 * the right size. */
+	struct buffer **slot = &wallpaper->buffers[wallpaper->next_buffer];
+	if (*slot == NULL || (*slot)->width != w || (*slot)->height != h) {
+		buffer_destroy(*slot);
+		*slot = buffer_create(wallpaper->shm, w, h);
+		if (*slot == NULL) {
 			wallpaper->running = false;
 			return;
 		}
 	}
-	cairo_t *cr = wallpaper->buffer->cr;
+	struct buffer *buffer = *slot;
+	wallpaper->next_buffer = 1 - wallpaper->next_buffer;
 
-	/* Sky: near-black, very slightly lighter towards the horizon. */
-	double cx = w / 2.0;
-	double horizon = h * 0.40;
-	cairo_pattern_t *sky = cairo_pattern_create_linear(0, 0, 0, h);
-	cairo_pattern_add_color_stop_rgb(sky, 0.0, HUD_BLACK);
-	cairo_pattern_add_color_stop_rgb(sky, horizon / h, 0.012, 0.055, 0.028);
-	cairo_pattern_add_color_stop_rgb(sky, 1.0, HUD_BLACK);
-	cairo_set_source(cr, sky);
-	cairo_paint(cr);
-	cairo_pattern_destroy(sky);
+	double now = now_seconds();
+	scene_draw(&wallpaper->scene, buffer->cr, now - wallpaper->started_at);
+	wallpaper->last_frame_at = now;
+	cairo_surface_flush(buffer->cairo_surface);
 
-	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
-		CAIRO_FONT_WEIGHT_NORMAL);
-	cairo_set_line_width(cr, HUD_LINE);
+	/* Ask to be told when to draw again. The request is part of the
+	 * commit below, so it has to come before it. */
+	struct wl_callback *callback = wl_surface_frame(wallpaper->surface);
+	wl_callback_add_listener(callback, &frame_listener, wallpaper);
+	wallpaper->frame_requested = true;
 
-	/* Horizon: a long line with a gap in the middle for the flight path
-	 * marker. */
-	cairo_set_source_rgb(cr, HUD_GREEN);
-	line(cr, cx - 330, horizon, cx - 44, horizon);
-	line(cr, cx + 44, horizon, cx + 330, horizon);
-
-	/* Pitch ladder: a rung every 5 degrees. Above the horizon rungs are
-	 * solid, below they are dashed; each has a small tick pointing back
-	 * towards the horizon and its angle written at both ends. */
-	const double rung_spacing = 58;
-	cairo_set_font_size(cr, 12);
-	for (int step = -2; step <= 2; step++) {
-		if (step == 0) {
-			continue;
-		}
-		double y = horizon - step * rung_spacing;
-		double tick = step > 0 ? 8 : -8;
-		if (step < 0) {
-			const double dashes[] = {9, 6};
-			cairo_set_dash(cr, dashes, 2, 0);
-		}
-		line(cr, cx - 150, y, cx - 50, y);
-		line(cr, cx + 50, y, cx + 150, y);
-		cairo_set_dash(cr, NULL, 0, 0);
-		line(cr, cx - 150, y, cx - 150, y + tick);
-		line(cr, cx + 150, y, cx + 150, y + tick);
-
-		char label[8];
-		snprintf(label, sizeof(label), "%d", step * 5);
-		draw_text(cr, label, cx - 158 - text_width(cr, label), y);
-		draw_text(cr, label, cx + 158, y);
-	}
-
-	/* Flight path marker: where the aircraft is actually going. A small
-	 * circle with wings and a fin. */
-	cairo_new_path(cr);
-	cairo_arc(cr, cx, horizon, 9, 0, 2 * M_PI);
-	cairo_stroke(cr);
-	line(cr, cx - 30, horizon, cx - 9, horizon);
-	line(cr, cx + 9, horizon, cx + 30, horizon);
-	line(cr, cx, horizon - 9, cx, horizon - 20);
-
-	/* Heading tape across the top: a tick every 2 degrees, a longer tick
-	 * and a number every 10, and a caret marking our heading (north). */
-	const double tape_y = 46, tick_gap = 14;
-	cairo_set_font_size(cr, 12);
-	for (int i = -18; i <= 18; i++) {
-		double x = cx + i * tick_gap;
-		bool major = i % 5 == 0;
-		line(cr, x, tape_y, x, tape_y + (major ? 12 : 6));
-		if (major) {
-			/* i ticks of 2 degrees either side of 360; show tens of
-			 * degrees as two digits, the way a HUD does (35, 00, 01). */
-			int tens = ((360 + i * 2) % 360) / 10;
-			char label[8];
-			snprintf(label, sizeof(label), "%02d", tens);
-			draw_text(cr, label, x - text_width(cr, label) / 2, tape_y - 12);
-		}
-	}
-	cairo_move_to(cr, cx, tape_y + 16);
-	cairo_line_to(cr, cx - 7, tape_y + 28);
-	cairo_line_to(cr, cx + 7, tape_y + 28);
-	cairo_close_path(cr);
-	cairo_stroke(cr);
-
-	/* Speed on the left, altitude on the right, level with the horizon. */
-	readout(cr, "KCAS", "450", cx - 440, horizon - 15);
-	readout(cr, "ALT FT", "24500", cx + 354, horizon - 15);
-
-	/* Small status lines under each box. */
-	cairo_set_font_size(cr, 12);
-	cairo_set_source_rgb(cr, HUD_DIM);
-	draw_text(cr, "M 0.82", cx - 440, horizon + 36);
-	draw_text(cr, "G 1.0", cx - 440, horizon + 54);
-	draw_text(cr, "NAV", cx + 354, horizon + 36);
-	draw_text(cr, "PERKINSOS", cx + 354, horizon + 54);
-
-	/* The fleet along the bottom, above where the dock sits. */
-	double aircraft_size = 62;
-	double fleet_y = h - 48 - aircraft_size - 58;
-	double fleet_gap = w / 4.0;
-	int fleet_count = COUNT(fleet);
-	for (int i = 0; i < fleet_count; i++) {
-		double x = cx + (i - (fleet_count - 1) / 2.0) * fleet_gap;
-		draw_aircraft(cr, &fleet[i], x, fleet_y, aircraft_size);
-	}
-
-	cairo_surface_flush(wallpaper->buffer->cairo_surface);
-	wl_surface_attach(wallpaper->surface, wallpaper->buffer->wl_buffer, 0, 0);
+	wl_surface_attach(wallpaper->surface, buffer->wl_buffer, 0, 0);
 	wl_surface_damage_buffer(wallpaper->surface, 0, 0, w, h);
 	wl_surface_commit(wallpaper->surface);
 }
@@ -268,13 +126,13 @@ static void layer_surface_configure(void *data,
 	struct wallpaper *wallpaper = data;
 	zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
 	/* The compositor re-sends configure whenever it rearranges the layers
-	 * (for example when the dock appears). Only redraw if our size really
-	 * changed; the picture is otherwise identical. */
+	 * (for example when the dock appears). Only a change of size matters. */
 	if ((int)width == wallpaper->width && (int)height == wallpaper->height) {
 		return;
 	}
 	wallpaper->width = width;
 	wallpaper->height = height;
+	scene_init(&wallpaper->scene, width, height);
 	draw(wallpaper);
 }
 
@@ -289,7 +147,68 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 	.closed = layer_surface_closed,
 };
 
-/* ---- registry events ---- */
+/* ---- pointer events ----
+ * These only update the scene's idea of where the mouse is. The picture is
+ * redrawn many times a second anyway, so the next frame shows the change. */
+
+static void pointer_enter(void *data, struct wl_pointer *pointer,
+		uint32_t serial, struct wl_surface *surface,
+		wl_fixed_t x, wl_fixed_t y) {
+	struct wallpaper *wallpaper = data;
+	scene_pointer_motion(&wallpaper->scene,
+		wl_fixed_to_double(x), wl_fixed_to_double(y));
+}
+
+static void pointer_leave(void *data, struct wl_pointer *pointer,
+		uint32_t serial, struct wl_surface *surface) {
+	/* The pointer moved onto a window or the dock. */
+	struct wallpaper *wallpaper = data;
+	scene_pointer_leave(&wallpaper->scene);
+}
+
+static void pointer_motion(void *data, struct wl_pointer *pointer,
+		uint32_t time, wl_fixed_t x, wl_fixed_t y) {
+	struct wallpaper *wallpaper = data;
+	scene_pointer_motion(&wallpaper->scene,
+		wl_fixed_to_double(x), wl_fixed_to_double(y));
+}
+
+static void pointer_button(void *data, struct wl_pointer *pointer,
+		uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
+	struct wallpaper *wallpaper = data;
+	if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED) {
+		scene_pointer_click(&wallpaper->scene);
+	}
+}
+
+static void pointer_axis(void *data, struct wl_pointer *pointer,
+		uint32_t time, uint32_t axis, wl_fixed_t value) {
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+	.enter = pointer_enter,
+	.leave = pointer_leave,
+	.motion = pointer_motion,
+	.button = pointer_button,
+	.axis = pointer_axis,
+};
+
+/* ---- seat and registry events ---- */
+
+static void seat_capabilities(void *data, struct wl_seat *seat,
+		uint32_t capabilities) {
+	struct wallpaper *wallpaper = data;
+	if ((capabilities & WL_SEAT_CAPABILITY_POINTER) &&
+			wallpaper->pointer == NULL) {
+		wallpaper->pointer = wl_seat_get_pointer(seat);
+		wl_pointer_add_listener(wallpaper->pointer, &pointer_listener,
+			wallpaper);
+	}
+}
+
+static const struct wl_seat_listener seat_listener = {
+	.capabilities = seat_capabilities,
+};
 
 static void registry_global(void *data, struct wl_registry *registry,
 		uint32_t name, const char *interface, uint32_t version) {
@@ -303,6 +222,10 @@ static void registry_global(void *data, struct wl_registry *registry,
 	} else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
 		wallpaper->layer_shell = wl_registry_bind(registry, name,
 			&zwlr_layer_shell_v1_interface, 1);
+	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
+		wallpaper->seat = wl_registry_bind(registry, name,
+			&wl_seat_interface, 1);
+		wl_seat_add_listener(wallpaper->seat, &seat_listener, wallpaper);
 	}
 }
 
@@ -317,6 +240,7 @@ static const struct wl_registry_listener registry_listener = {
 
 int main(void) {
 	struct wallpaper wallpaper = { .running = true };
+	wallpaper.started_at = now_seconds();
 
 	wallpaper.display = wl_display_connect(NULL);
 	if (wallpaper.display == NULL) {
@@ -350,13 +274,31 @@ int main(void) {
 	zwlr_layer_surface_v1_set_exclusive_zone(wallpaper.layer_surface, -1);
 	wl_surface_commit(wallpaper.surface);
 
+	const double frame_interval = 1.0 / FRAMES_PER_SECOND;
 	while (wallpaper.running) {
-		if (dispatch_with_timeout(wallpaper.display, -1) < 0) {
+		/* How long until the next frame is due? While we are waiting for
+		 * the compositor's go-ahead there is no deadline: sleep until an
+		 * event arrives (-1). */
+		int timeout_ms = -1;
+		if (!wallpaper.frame_requested) {
+			double due = wallpaper.last_frame_at + frame_interval;
+			double wait = due - now_seconds();
+			timeout_ms = wait > 0 ? (int)(wait * 1000) + 1 : 0;
+		}
+		if (dispatch_with_timeout(wallpaper.display, timeout_ms) < 0) {
 			break;
+		}
+		/* Draw when both are true: the compositor is ready for a frame,
+		 * and enough time has passed since the last one. */
+		if (!wallpaper.frame_requested &&
+				now_seconds() - wallpaper.last_frame_at >= frame_interval) {
+			draw(&wallpaper);
 		}
 	}
 
-	buffer_destroy(wallpaper.buffer);
+	scene_finish(&wallpaper.scene);
+	buffer_destroy(wallpaper.buffers[0]);
+	buffer_destroy(wallpaper.buffers[1]);
 	wl_display_disconnect(wallpaper.display);
 	return 0;
 }
