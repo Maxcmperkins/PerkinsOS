@@ -80,6 +80,30 @@ if grep -aq '^compositor=perkinsos' "$LOG"; then
 	count appclosed perkinsos-sysinfo
 	grep -aq '^appclosed=0' "$LOG" || fail "Alt+Q did not close System Info"
 	echo "ok: System Info closed on request"
+
+	# Maximize: a maximized window fills the screen except the dock.
+	send 'WAYLAND_DISPLAY=wayland-0 foot --maximized > /dev/null 2>&1 &'
+	count maximized foot
+	grep -aq '^maximized=1' "$LOG" || fail "foot --maximized did not start"
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/maximize-test.png > /dev/null
+	# Compare with the first screenshot (empty desktop + dock): the pixel
+	# just above the dock in the bottom-right corner must have changed from
+	# wallpaper to window, and a pixel inside the dock must be unchanged.
+	python3 - "$SHOT" output/maximize-test.png <<'PY' || fail "maximized window does not fill the area above the dock, or covers the dock"
+import sys
+sys.path.insert(0, "ci")
+from gif import read_png
+(w, h, before), (_, _, after) = read_png(sys.argv[1]), read_png(sys.argv[2])
+def pixel(rgb, x, y):
+    return rgb[(y * w + x) * 3:(y * w + x) * 3 + 3]
+above_dock = (w - 3, h - 48 - 3)
+in_dock = (w // 2, h - 10)
+covered = pixel(before, *above_dock) != pixel(after, *above_dock)
+dock_intact = pixel(before, *in_dock) == pixel(after, *in_dock)
+sys.exit(0 if covered and dock_intact else 1)
+PY
+	echo "ok: a maximized window fills the screen and stops at the dock"
+	press alt-q
 fi
 
 stop_vm

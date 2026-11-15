@@ -43,13 +43,13 @@ jobs:
       - name: Boot test (login prompt, log in, power off)
         run: make test
 
-      - name: Desktop test (compositor up, screenshot not blank)
+      - name: Desktop test (keybindings, layer-shell, launcher, app, maximize)
         run: make test-desktop
 
-      - name: Upload screenshot
+      - name: Upload screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: desktop-screenshot
-          path: output/desktop-test.png
+          name: desktop-screenshots
+          path: output/*-test.png
           if-no-files-found: ignore

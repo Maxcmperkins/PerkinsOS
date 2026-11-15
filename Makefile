@@ -3,6 +3,7 @@
 #   make run            boot them in QEMU (quit with Ctrl-A then X)
 #   make test           boot headless and check we can log in
 #   make test-desktop   boot headless and screenshot the desktop
+#   make demo           record docs/demo.gif from a headless run
 #   make compositor     rebuild only compositor/ and repack the image (fast)
 #   make shell          rebuild only shell/ and repack the image (fast)
 #   make fork-tinywl    one-off: copy stock TinyWL into compositor/
@@ -37,7 +38,7 @@ BR_MAKE := $(MAKE) -C $(BUILDROOT_DIR) O=$(OUTPUT) \
 # Use KVM (hardware virtualisation) when we're allowed to; it's far faster.
 KVM := $(shell [ -r /dev/kvm ] && [ -w /dev/kvm ] && echo yes)
 
-.PHONY: image run test test-desktop compositor shell fork-tinywl menuconfig savedefconfig clean
+.PHONY: image run test test-desktop demo compositor shell fork-tinywl menuconfig savedefconfig clean
 
 image: $(OUTPUT)/.config
 	$(BR_MAKE)
@@ -93,6 +94,11 @@ test:
 # Start the compositor headless and screenshot it to output/desktop-test.png.
 test-desktop:
 	bash ci/desktop-test.sh
+
+# Record docs/demo.gif: boot headless, drive the desktop with key presses,
+# screenshot each step.
+demo:
+	bash ci/demo.sh
 
 # Fast edit loop: rebuild only our own package, then repack the image.
 # Takes seconds, not minutes. `-rebuild` makes Buildroot copy the folder
