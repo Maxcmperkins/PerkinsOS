@@ -7,6 +7,8 @@
 # its QMP socket lets them move and click the mouse.
 
 TIMEOUT=${TIMEOUT:-180}          # seconds allowed per step (slow without KVM)
+# Tests run the VM at 1024x768 whatever `make run` uses, because they click
+# at fixed pixel positions. Set SCREEN to override (e.g. for a screenshot).
 WORK=$(mktemp -d)
 LOG=$WORK/serial.log
 MONITOR=$WORK/monitor.sock
@@ -15,7 +17,7 @@ QMP=$WORK/qmp.sock               # QEMU's JSON control socket, for the mouse
 # start_vm: boot the image with no window and wait for the login prompt.
 start_vm() {
 	mkfifo "$WORK/in"
-	make -s run QEMU_DISPLAY=none \
+	make -s run QEMU_DISPLAY=none SCREEN="${SCREEN:-1024x768}" \
 		QEMU_EXTRA="-monitor unix:$MONITOR,server,nowait -qmp unix:$QMP,server,nowait" \
 		< "$WORK/in" > "$LOG" 2>&1 &
 	QEMU_PID=$!

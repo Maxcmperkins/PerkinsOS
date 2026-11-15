@@ -10,7 +10,6 @@ filtering), not PNGs in general.
 import struct
 import sys
 import zlib
-from collections import Counter
 
 
 def read_png(path):
@@ -39,23 +38,58 @@ def read_png(path):
     return width, height, bytes(rgb)
 
 
-def build_palette(frames):
-    """Pick up to 256 colours for all frames; return (palette, lookup).
+def halve(width, height, rgb):
+    """Return the image at half size: each pixel is the average of a 2x2
+    block. Keeps the GIF small enough for a README."""
+    w, h = width // 2, height // 2
+    out = bytearray(w * h * 3)
+    for y in range(h):
+        top = y * 2 * width * 3
+        bottom = top + width * 3
+        for x in range(w):
+            a = top + x * 6
+            b = bottom + x * 6
+            o = (y * w + x) * 3
+            out[o] = (rgb[a] + rgb[a + 3] + rgb[b] + rgb[b + 3]) >> 2
+            out[o + 1] = (rgb[a + 1] + rgb[a + 4] + rgb[b + 1] + rgb[b + 4]) >> 2
+            out[o + 2] = (rgb[a + 2] + rgb[a + 5] + rgb[b + 2] + rgb[b + 5]) >> 2
+    return w, h, bytes(out)
 
-    GIF allows 256 colours. A flat UI uses a few hundred, mostly the soft
-    edges of text. Keep the 256 most common and map each of the rest to
-    the nearest kept colour.
-    """
-    counts = Counter()
-    for _, _, rgb in frames:
-        counts.update(rgb[i:i + 3] for i in range(0, len(rgb), 3))
-    palette = [colour for colour, _ in counts.most_common(256)]
-    lookup = {colour: index for index, colour in enumerate(palette)}
-    for colour in counts:
-        if colour not in lookup:
-            lookup[colour] = min(range(len(palette)), key=lambda i: sum(
-                (a - b) ** 2 for a, b in zip(palette[i], colour)))
-    return palette, lookup
+
+# GIF allows 256 colours. The desktop has a photographic sky with tens of
+# thousands, so use a fixed, evenly spaced set: 6 levels of red, 7 of green
+# (the eye is most sensitive to green) and 6 of blue = 252 colours.
+LEVELS = (6, 7, 6)
+PALETTE = [bytes((r * 255 // 5, g * 255 // 6, b * 255 // 5))
+           for r in range(6) for g in range(7) for b in range(6)]
+
+# Ordered dithering: before rounding each pixel to the nearest level, nudge
+# it by an amount that depends on its position in a repeating 4x4 pattern.
+# Neighbouring pixels then round in different directions, and a smooth
+# gradient becomes a fine mix of two colours instead of visible bands.
+BAYER = (0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5)
+
+
+def to_indices(width, height, rgb):
+    """Map every pixel to an index into PALETTE, with dithering."""
+    out = bytearray(width * height)
+    # For each channel, a table from (value + nudge) to its level.
+    tables = []
+    for levels in LEVELS:
+        step = 255 / (levels - 1)
+        tables.append([min(levels - 1, max(0, int((v - 32) / step + 0.5)))
+                       for v in range(256 + 64)])
+    red, green, blue = tables
+    spread = 255 / 6 / 16          # one level's worth, over the 16 patterns
+    for y in range(height):
+        row = y * width
+        pattern = BAYER[(y & 3) * 4:(y & 3) * 4 + 4]
+        for x in range(width):
+            i = (row + x) * 3
+            nudge = int((pattern[x & 3] - 7.5) * spread) + 32
+            out[row + x] = (red[rgb[i] + nudge] * 7 +
+                            green[rgb[i + 1] + nudge]) * 6 + blue[rgb[i + 2] + nudge]
+    return bytes(out)
 
 
 def lzw_encode(indices):
@@ -108,7 +142,7 @@ def lzw_encode(indices):
 
 def write_gif(path, frames, seconds_per_frame):
     width, height, _ = frames[0]
-    palette, lookup = build_palette(frames)
+    palette = PALETTE
     delay = int(seconds_per_frame * 100)          # GIF counts in 1/100 s
 
     with open(path, "wb") as f:
@@ -123,7 +157,7 @@ def write_gif(path, frames, seconds_per_frame):
 
         for frame_width, frame_height, rgb in frames:
             assert (frame_width, frame_height) == (width, height)
-            indices = bytes(lookup[rgb[i:i + 3]] for i in range(0, len(rgb), 3))
+            indices = to_indices(width, height, rgb)
             # Graphic control extension: how long to show this frame.
             f.write(b"\x21\xF9\x04\x00" + struct.pack("<H", delay) + b"\x00\x00")
             # Image descriptor: position, size, no local palette.
@@ -139,7 +173,7 @@ def write_gif(path, frames, seconds_per_frame):
 
 def main():
     output, seconds = sys.argv[1], float(sys.argv[2])
-    frames = [read_png(path) for path in sys.argv[3:]]
+    frames = [halve(*read_png(path)) for path in sys.argv[3:]]
     write_gif(output, frames, seconds)
     print(f"wrote {output}: {len(frames)} frames")
 

@@ -56,6 +56,8 @@ Both use the same handshake: the client commits with no buffer, the compositor r
 
 The wallpaper is the one client that animates. It never draws on its own timer: after each frame it asks the compositor for a **frame callback** and draws the next frame when that arrives, capped at 12 frames a second. The compositor only sends frame callbacks to visible surfaces, so a wallpaper hidden behind a maximized window stops drawing. It alternates between two buffers so it never draws into the one the compositor is showing. Its radar and RWR read the process list from `/proc` every two seconds.
 
+Most of the wallpaper is cairo vector drawing, scaled from a 768-unit-tall design canvas to the real screen. Two parts bypass cairo and write the frame's pixels directly, because they touch most of the screen every frame: the outside view (`sky.c`), a tiling cloud texture projected in perspective onto a plane below and a plane above, one table lookup per pixel and no floating point in the inner loop; and laying the cached cockpit image over the frame, which visits only the non-transparent runs of each row. At 1920x1080 under software emulation the wallpaper uses about 16% of the VM's two CPUs and the compositor about 8%.
+
 ## How a frame reaches the screen
 
 1. A client draws into its shared-memory buffer and sends `wl_surface.attach` + `commit`.

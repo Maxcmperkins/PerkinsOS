@@ -1,12 +1,14 @@
 # PerkinsOS
 
-A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon, Tornado and Lightning fly in formation ahead of you, seen through the HUD, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps.
+A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon, Tornado and Lightning fly in formation ahead of you over sea and cloud, seen through the HUD, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps. Everything on screen is drawn by code in this repo; there are no image files.
 
 [![CI](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml/badge.svg)](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml)
 
-![PerkinsOS booting to the desktop, opening the launcher, an app and a terminal](docs/demo.gif)
+![The PerkinsOS desktop: the view from a fighter cockpit](docs/screenshot.png)
 
-The GIF is recorded by `make demo` from a headless boot: every frame is a screenshot of the real VM, driven by injected key presses.
+![Locking a radar contact, starting an app from the cockpit, the launcher, a terminal](docs/demo.gif)
+
+Both are produced by `make demo` from headless boots: every frame is a screenshot of the real VM, driven by injected key presses and mouse clicks. The still is at 1920x1080; the GIF is half-size and limited to 252 colours.
 
 ## What it is
 
@@ -62,10 +64,10 @@ Requires Linux (WSL2 Ubuntu on Windows works). Setup is in [docs/SETUP.md](docs/
 
 ```sh
 make image          # build the Buildroot image (first build ~25 min)
-make run            # boot it in QEMU
+make run            # boot it in QEMU at 1920x1080 (SCREEN=1280x720 for smaller)
 make test           # boot headless, log in over serial, power off
 make test-desktop   # boot headless and exercise the desktop
-make demo           # record docs/demo.gif
+make demo           # record docs/demo.gif and docs/screenshot.png
 make compositor     # rebuild only compositor/ (seconds)
 make shell          # rebuild only shell/ (seconds)
 ```

@@ -64,15 +64,25 @@ $(OUTPUT)/.config: $(DEFCONFIG) $(BUILDROOT_DIR)/Makefile
 # Where the VM's screen goes: a GTK window if this terminal has a desktop
 # (WSLg sets DISPLAY), otherwise nowhere. Override with QEMU_DISPLAY=none.
 QEMU_DISPLAY ?= $(if $(DISPLAY)$(WAYLAND_DISPLAY),gtk,none)
+comma := ,
 # Extra QEMU arguments, e.g. a monitor socket for the CI test.
 QEMU_EXTRA ?=
+# The VM's screen resolution, WIDTHxHEIGHT. Full HD by default; the tests
+# use 1024x768. Try `make run SCREEN=1280x720` if 1080p is too big or slow.
+SCREEN ?= 1920x1080
+SCREEN_WIDTH := $(word 1,$(subst x, ,$(SCREEN)))
+SCREEN_HEIGHT := $(word 2,$(subst x, ,$(SCREEN)))
+# In a window, let QEMU shrink the picture to fit if the window is smaller
+# than the VM's screen (a 1080p VM on a 1080p laptop, minus the title bar).
+QEMU_DISPLAY_OPTIONS := $(if $(filter gtk,$(QEMU_DISPLAY)),$(comma)zoom-to-fit=on)
 
 # Boot the image:
 #   -kernel/-append     hand the kernel straight to QEMU: no bootloader needed
 #   root=/dev/vda       the ext4 image, attached as the first virtio disk
 #   console=ttyS0       kernel messages and the login prompt go to the serial port
 #   -serial mon:stdio   ...and the serial port is this terminal
-#   virtio-vga          the virtio-gpu graphics card the compositor draws to
+#   virtio-vga          the virtio-gpu graphics card the compositor draws to;
+#                       xres/yres is the resolution it tells the VM to use
 #   virtio-keyboard/-tablet  input devices; a tablet reports absolute
 #                       positions, so the pointer isn't captured by the window
 run:
@@ -84,8 +94,10 @@ run:
 		-append "root=/dev/vda rw console=ttyS0" \
 		-drive file=$(IMAGES)/rootfs.ext4,if=virtio,format=raw \
 		-netdev user,id=net0 -device virtio-net-pci,netdev=net0 \
-		-device virtio-vga -device virtio-keyboard-pci -device virtio-tablet-pci \
-		-display $(QEMU_DISPLAY) -serial mon:stdio $(QEMU_EXTRA)
+		-device virtio-vga,xres=$(SCREEN_WIDTH),yres=$(SCREEN_HEIGHT) \
+		-device virtio-keyboard-pci -device virtio-tablet-pci \
+		-display $(QEMU_DISPLAY)$(QEMU_DISPLAY_OPTIONS) \
+		-serial mon:stdio $(QEMU_EXTRA)
 
 # Boot headless, log in over the serial console, power off. See the script.
 test:
@@ -95,10 +107,12 @@ test:
 test-desktop:
 	bash ci/desktop-test.sh
 
-# Record docs/demo.gif: boot headless, drive the desktop with key presses,
-# screenshot each step.
+# Record docs/demo.gif: boot headless, drive the desktop with key presses
+# and mouse clicks, screenshot each step. Then save a full-HD still to
+# docs/screenshot.png.
 demo:
 	bash ci/demo.sh
+	bash ci/screenshot-hd.sh
 
 # Fast edit loop: rebuild only our own package, then repack the image.
 # Takes seconds, not minutes. `-rebuild` makes Buildroot copy the folder

@@ -69,5 +69,4 @@ frame 2                 # 9: both closed: back to the cockpit
 stop_vm
 
 python3 "$(dirname "$0")/gif.py" docs/demo.gif 1.5 "$FRAMES"/*.png
-cp "$FRAMES/08.png" docs/screenshot.png
-ls -l docs/demo.gif docs/screenshot.png
+ls -l docs/demo.gif
