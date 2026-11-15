@@ -260,10 +260,19 @@ void sky_render(uint32_t *pixels, int stride_pixels, const struct sky_view *view
 		 * pixel replaces a multiplication, and letting the number wrap
 		 * round is what makes the texture repeat. */
 		uint32_t u = (uint32_t)(int64_t)(-centre * step * 65536.0);
-		uint32_t du = (uint32_t)(int64_t)(step * 65536.0);
-		for (int x = 0; x < view->width; x++) {
-			out[x] = table[texture_row[(u >> 16) & mask]];
+		/* Sample every second pixel and write each sample twice. Cloud
+		 * and sea have no sharp vertical edges, so the eye can't tell,
+		 * and it halves the work of the busiest loop in the program. */
+		uint32_t du = (uint32_t)(int64_t)(step * 2 * 65536.0);
+		int pairs = view->width / 2;
+		for (int x = 0; x < pairs; x++) {
+			uint32_t colour = table[texture_row[(u >> 16) & mask]];
+			out[2 * x] = colour;
+			out[2 * x + 1] = colour;
 			u += du;
+		}
+		if (view->width & 1) {
+			out[view->width - 1] = table[texture_row[(u >> 16) & mask]];
 		}
 	}
 }

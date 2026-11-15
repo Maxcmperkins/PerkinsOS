@@ -3,14 +3,15 @@
  *
  * What is in the picture, back to front:
  *   outside     blue sky, sea and cloud streaming past below (sky.c)
- *   formation   three jets ahead of you, seen from behind: a Typhoon in
- *               front, a Tornado to the left, a Lightning to the right
+ *   formation   three jets ahead of you: a Typhoon in front, a Tornado
+ *               to the left, a Lightning to the right (3D models, model.c)
  *   HUD         green symbols on the glass in front of you: pitch ladder,
  *               flight path marker, heading tape, speed and altitude
  *   cockpit     canopy arch, sills and instrument panel (cached)
  *   screens     left screen: radar, each contact a running program
  *               right screen: RWR, each "threat" a program using the CPU
  *   keys        the buttons between the screens start apps
+ *   dials       CPU, memory, load and task count (on a wide screen)
  *
  * Everything is designed on a canvas 768 units tall (DESIGN_HEIGHT) and
  * scaled to the real screen, so the numbers in this file are design units,
@@ -27,6 +28,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "apps.h"
 #include "client.h"
@@ -187,230 +189,56 @@ static struct flight flight_at(double t) {
 	return f;
 }
 
-/* ---- the formation, seen from behind ----
+/* ---- the formation ----
  *
- * Each aircraft is drawn around 0,0 with `s` = half its wingspan. You are
- * a little above them, so you see a sliver of the top of each wing.
- * From behind, what tells them apart is the engines and the tail:
- *   Typhoon    two engines side by side, low delta wing, small canards
- *   Tornado    two engines side by side, wings on top of the fuselage, a
- *              very tall fin, tailplanes drooping
- *   Lightning  two engines stacked one above the other, bare metal finish
+ * Three aircraft ahead of you, drawn as 3D models by model.c. Here we only
+ * decide where each one is and how it is turned at time t.
  */
 
-/* The paint scheme of the aircraft currently being drawn. */
-static struct colour paint_top, paint_side, paint_under, paint_line;
-
-static void use_grey_paint(void) {
-	paint_top = (struct colour){ 0.69, 0.72, 0.76 };
-	paint_side = (struct colour){ 0.49, 0.52, 0.57 };
-	paint_under = (struct colour){ 0.28, 0.30, 0.34 };
-	paint_line = (struct colour){ 0.13, 0.14, 0.16 };
-}
-
-static void use_metal_paint(void) {
-	paint_top = (struct colour){ 0.86, 0.88, 0.90 };
-	paint_side = (struct colour){ 0.62, 0.65, 0.69 };
-	paint_under = (struct colour){ 0.36, 0.38, 0.42 };
-	paint_line = (struct colour){ 0.17, 0.18, 0.20 };
-}
-
-/* Fill the current path shaded from `top` at top_y to `bottom` at
- * bottom_y, then outline it thinly. */
-static void solid(cairo_t *cr, double top_y, double bottom_y,
-		struct colour top, struct colour bottom) {
-	set_shading(cr, top_y, bottom_y, top, bottom);
-	cairo_fill_preserve(cr);
-	set_colour(cr, paint_line);
-	cairo_stroke(cr);
-}
-
-/* A wing or tailplane on both sides: a tapered slab from root to tip.
- * `thick` is half its thickness at the root; the tip is a third of that. */
-static void wings(cairo_t *cr, double root_x, double root_y,
-		double tip_x, double tip_y, double thick) {
-	double tip_thick = thick / 3;
-	for (int side = -1; side <= 1; side += 2) {
-		cairo_move_to(cr, side * root_x, root_y - thick);
-		cairo_line_to(cr, side * tip_x, tip_y - tip_thick);
-		cairo_line_to(cr, side * tip_x, tip_y + tip_thick);
-		cairo_line_to(cr, side * root_x, root_y + thick);
-		cairo_close_path(cr);
-		solid(cr, root_y - thick, root_y + thick, paint_top, paint_under);
-	}
-}
-
-/* A fin seen from behind: a narrow upright blade, lit from the left. */
-static void fin(cairo_t *cr, double base_y, double top_y, double half_width) {
-	cairo_move_to(cr, -half_width, base_y);
-	cairo_line_to(cr, -half_width * 0.35, top_y);
-	cairo_line_to(cr, half_width * 0.35, top_y);
-	cairo_line_to(cr, half_width, base_y);
-	cairo_close_path(cr);
-	solid(cr, top_y, base_y, paint_top, paint_side);
-}
-
-/* The back of the canopy, showing over the top of the fuselage. */
-static void canopy(cairo_t *cr, double y, double rx, double ry) {
-	ellipse(cr, 0, y, rx, ry);
-	solid(cr, y - ry, y + ry, (struct colour){ 0.55, 0.68, 0.80 },
-		(struct colour){ 0.12, 0.17, 0.24 });
-}
-
-/* A jet pipe: a dark metal ring with a black hole. The glow of the
- * exhaust is added every frame, on top (see draw_formation). */
-static void nozzle(cairo_t *cr, double x, double y, double radius) {
-	circle(cr, x, y, radius);
-	solid(cr, y - radius, y + radius, (struct colour){ 0.42, 0.42, 0.44 },
-		(struct colour){ 0.15, 0.15, 0.17 });
-	circle(cr, x, y, radius * 0.72);
-	cairo_set_source_rgb(cr, 0.03, 0.03, 0.04);
-	cairo_fill(cr);
-}
-
-/* A missile or fuel tank hanging under the wing, on both sides. */
-static void stores(cairo_t *cr, double x, double y, double radius) {
-	for (int side = -1; side <= 1; side += 2) {
-		circle(cr, side * x, y, radius);
-		solid(cr, y - radius, y + radius, paint_side, paint_under);
-	}
-}
-
 struct wingman {
-	const char *name;
-	void (*draw)(cairo_t *cr, double s);
-	double offset_x, offset_y; /* from the aim point */
-	double size;               /* half wingspan: nearer aircraft are bigger */
-	/* Engine nozzles: x, y, radius, as fractions of size. */
-	double nozzles[2][3];
+	int model;
+	double x, y, z; /* its slot: metres right, up and ahead of the camera */
 };
 
-static void draw_typhoon(cairo_t *cr, double s) {
-	use_grey_paint();
-	wings(cr, 0.14 * s, 0.045 * s, 1.00 * s, 0.105 * s, 0.050 * s);
-	stores(cr, 0.46 * s, 0.115 * s, 0.022 * s);
-	stores(cr, 0.72 * s, 0.120 * s, 0.018 * s);
-	stores(cr, 1.00 * s, 0.105 * s, 0.016 * s);                      /* wingtip pods */
-	wings(cr, 0.15 * s, -0.115 * s, 0.36 * s, -0.150 * s, 0.022 * s); /* canards */
-	fin(cr, -0.14 * s, -0.60 * s, 0.034 * s);
-	/* Fuselage, with the box of the chin intake underneath. */
-	cairo_rectangle(cr, -0.14 * s, 0.10 * s, 0.28 * s, 0.085 * s);
-	solid(cr, 0.10 * s, 0.185 * s, paint_under, paint_line);
-	rounded_rect(cr, -0.175 * s, -0.16 * s, 0.35 * s, 0.29 * s, 0.08 * s);
-	solid(cr, -0.16 * s, 0.13 * s, paint_top, paint_under);
-	canopy(cr, -0.165 * s, 0.062 * s, 0.045 * s);
-}
-
-static void draw_tornado(cairo_t *cr, double s) {
-	use_grey_paint();
-	wings(cr, 0.17 * s, 0.085 * s, 0.52 * s, 0.150 * s, 0.030 * s);   /* tailplanes */
-	wings(cr, 0.17 * s, -0.130 * s, 1.00 * s, -0.070 * s, 0.050 * s); /* wings, up high */
-	stores(cr, 0.40 * s, -0.045 * s, 0.040 * s);                      /* fuel tanks */
-	stores(cr, 0.68 * s, -0.050 * s, 0.020 * s);
-	fin(cr, -0.17 * s, -0.90 * s, 0.048 * s);
-	rounded_rect(cr, -0.195 * s, -0.19 * s, 0.39 * s, 0.38 * s, 0.06 * s);
-	solid(cr, -0.19 * s, 0.19 * s, paint_top, paint_under);
-	canopy(cr, -0.195 * s, 0.070 * s, 0.045 * s);
-}
-
-static void draw_lightning(cairo_t *cr, double s) {
-	use_metal_paint();
-	wings(cr, 0.13 * s, 0.270 * s, 0.47 * s, 0.305 * s, 0.028 * s);  /* tailplanes, low */
-	wings(cr, 0.14 * s, 0.010 * s, 1.00 * s, 0.090 * s, 0.050 * s);
-	fin(cr, -0.30 * s, -0.86 * s, 0.045 * s);
-	/* A tall, narrow fuselage: the two engines are one above the other. */
-	ellipse(cr, 0, 0, 0.165 * s, 0.335 * s);
-	solid(cr, -0.335 * s, 0.335 * s, paint_top, paint_under);
-	canopy(cr, -0.335 * s, 0.055 * s, 0.040 * s);
-}
-
-/* The leader is dead ahead, so you see it through the HUD glass. */
-static const struct wingman formation[AIRCRAFT_COUNT] = {
-	{ "TORNADO", draw_tornado, -262, 6, 78,
-		{ { -0.092, 0.025, 0.080 }, { 0.092, 0.025, 0.080 } } },
-	{ "LIGHTNING", draw_lightning, 262, 2, 66,
-		{ { 0, -0.135, 0.105 }, { 0, 0.135, 0.105 } } },
-	{ "TYPHOON", draw_typhoon, 0, -62, 74,
-		{ { -0.082, -0.015, 0.072 }, { 0.082, -0.015, 0.072 } } },
+/* The leader is dead ahead and a little above, seen through the HUD. The
+ * other two are closer, out to the sides and below you, so you look down
+ * on their wings from behind. (Level with you, a wing is seen edge-on and
+ * all but disappears.) */
+static const struct wingman formation[MODEL_COUNT] = {
+	{ MODEL_TORNADO, -17.5, -6.2, 35.0 },
+	{ MODEL_LIGHTNING, 16.5, -5.6, 33.0 },
+	{ MODEL_TYPHOON, 0.0, 3.2, 44.0 },
 };
 
-/* An aircraft's picture is this many half-wingspans wide and tall, with
- * the aircraft's 0,0 at this point inside it. */
-#define SPRITE_WIDTH 2.3
-#define SPRITE_HEIGHT 1.8
-#define SPRITE_ORIGIN_X 1.15
-#define SPRITE_ORIGIN_Y 1.20
+/* How long a lens the camera has, in design units. It sets how big the
+ * aircraft look for their distance. */
+#define FOCAL_LENGTH 430.0
 
-/* Draw one aircraft into its own image, once, at full screen resolution.
- * Each frame then only has to place the finished picture. */
-static cairo_surface_t *render_aircraft(const struct scene *scene,
-		const struct wingman *wingman) {
-	double s = wingman->size;
-	cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
-		(int)ceil(SPRITE_WIDTH * s * scene->scale),
-		(int)ceil(SPRITE_HEIGHT * s * scene->scale));
-	cairo_t *cr = cairo_create(surface);
-	cairo_scale(cr, scene->scale, scene->scale);
-	cairo_translate(cr, SPRITE_ORIGIN_X * s, SPRITE_ORIGIN_Y * s);
-	cairo_set_line_width(cr, 0.8);
-	cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
-	wingman->draw(cr, s);
-	for (int i = 0; i < 2; i++) {
-		nozzle(cr, wingman->nozzles[i][0] * s, wingman->nozzles[i][1] * s,
-			wingman->nozzles[i][2] * s);
-	}
-	cairo_destroy(cr);
-	return surface;
-}
-
-static void draw_formation(struct scene *scene, cairo_t *cr,
-		const struct layout *l, double t) {
-	for (int i = 0; i < AIRCRAFT_COUNT; i++) {
+/* Draw the aircraft into the frame's pixels. */
+static void draw_formation(struct scene *scene, const struct layout *l,
+		double t, uint32_t *pixels, int stride_pixels) {
+	for (int i = 0; i < MODEL_COUNT; i++) {
 		const struct wingman *wingman = &formation[i];
-		double s = wingman->size;
 		/* Each aircraft drifts slowly around its slot, out of step with
 		 * the others: formation flying is never perfectly still. */
 		double phase = i * 2.1;
-		double x = l->aim_x + wingman->offset_x + 9 * sin(t * 0.50 + phase);
-		double y = l->aim_y + wingman->offset_y + 6 * sin(t * 0.78 + phase * 1.7);
-		/* It banks a little towards the way it is drifting. */
-		double bank = 2.5 * DEGREES * cos(t * 0.50 + phase);
-
-		/* Move the origin to the aircraft and tilt it; from here on
-		 * 0,0 is the aircraft's centre. */
-		cairo_save(cr);
-		cairo_translate(cr, x, y);
-		cairo_rotate(cr, bank);
-
-		/* Place the cached picture. It was drawn in screen pixels, so
-		 * undo the design scale while painting it. */
-		cairo_save(cr);
-		cairo_scale(cr, 1 / scene->scale, 1 / scene->scale);
-		cairo_set_source_surface(cr, scene->aircraft[i],
-			-SPRITE_ORIGIN_X * s * scene->scale,
-			-SPRITE_ORIGIN_Y * s * scene->scale);
-		cairo_paint(cr);
-		cairo_restore(cr);
-
-		/* Exhaust glow: hot in the middle, fading out past the rim of
-		 * the nozzle, and flickering. This is the only part of the
-		 * aircraft that is drawn fresh each frame. */
-		double glow = 0.72 + 0.20 * sin(t * 9 + phase * 3);
-		for (int n = 0; n < 2; n++) {
-			double nx = wingman->nozzles[n][0] * s;
-			double ny = wingman->nozzles[n][1] * s;
-			double radius = wingman->nozzles[n][2] * s * 1.5;
-			cairo_pattern_t *flame = cairo_pattern_create_radial(
-				nx, ny, 0, nx, ny, radius);
-			cairo_pattern_add_color_stop_rgba(flame, 0.0, 1.0, 0.93, 0.70, glow);
-			cairo_pattern_add_color_stop_rgba(flame, 0.45, 1.0, 0.55, 0.15, glow * 0.75);
-			cairo_pattern_add_color_stop_rgba(flame, 1.0, 1.0, 0.30, 0.05, 0.0);
-			cairo_set_source(cr, flame);
-			circle(cr, nx, ny, radius);
-			cairo_fill(cr);
-			cairo_pattern_destroy(flame);
-		}
-		cairo_restore(cr);
+		double sway = sin(t * 0.50 + phase);
+		struct model_pose pose = {
+			.x = wingman->x + 0.7 * sway,
+			.y = wingman->y + 0.45 * sin(t * 0.78 + phase * 1.7),
+			.z = wingman->z + 0.8 * sin(t * 0.31 + phase),
+			/* It rolls towards the way it is drifting, and its nose
+			 * hunts up and down and side to side by a degree or so. */
+			.roll = -4.0 * DEGREES * cos(t * 0.50 + phase),
+			.pitch = 1.2 * DEGREES * sin(t * 0.62 + phase),
+			.yaw = 1.0 * DEGREES * sin(t * 0.41 + phase * 0.7),
+			.focal = FOCAL_LENGTH * scene->scale,
+			.screen_x = l->aim_x * scene->scale,
+			.screen_y = l->aim_y * scene->scale,
+			.glow = 0.86 + 0.14 * sin(t * 11 + phase * 3), /* flicker */
+		};
+		model_draw(wingman->model, &pose, pixels, stride_pixels,
+			scene->width, scene->height);
 	}
 }
 
@@ -753,6 +581,112 @@ static int key_at(const struct layout *l, double x, double y) {
 	return -1;
 }
 
+/* ---- dials ----
+ *
+ * Round gauges in the spaces either side of the centre panel, each showing
+ * one real figure about the machine. The face (ring, ticks, name) is part
+ * of the cached cockpit; only the needle is drawn each frame. They only
+ * appear on a wide screen: on a 4:3 screen there is no room.
+ */
+#define DIAL_COUNT 4
+#define DIAL_RADIUS 46
+
+struct dial {
+	const char *name;
+	double full_scale;  /* the value at the end of the scale */
+	const char *top;    /* the number printed at the end of the scale */
+};
+
+static const struct dial dials[DIAL_COUNT] = {
+	{ "CPU %", 100, "100" },
+	{ "MEM %", 100, "100" },
+	{ "LOAD", 2, "2" },
+	{ "TASKS", 40, "40" },
+};
+
+/* Centre of dial `index`, or false if this screen has no room for dials.
+ * Dials 0 and 1 are stacked left of the centre panel, 2 and 3 right. */
+static bool dial_position(const struct layout *l, int index,
+		double *x, double *y) {
+	double left_edge = l->radar_x + SCREEN_SIZE / 2.0 + 11;
+	double gap = (l->keys_x - 30) - left_edge;
+	if (gap < 2 * DIAL_RADIUS + 40) {
+		return false;
+	}
+	double offset = left_edge + gap / 2;
+	*x = index < 2 ? offset : l->width - offset;
+	*y = l->scope_y + (index % 2 == 0 ? -54 : 56);
+	return true;
+}
+
+/* A dial's scale runs clockwise from lower-left (-135 degrees from "up")
+ * to lower-right (+135). */
+static double dial_bearing(double fraction) {
+	if (fraction < 0) fraction = 0;
+	if (fraction > 1) fraction = 1;
+	return -135 + 270 * fraction;
+}
+
+static void draw_dial_face(cairo_t *cr, const struct dial *dial,
+		double x, double y) {
+	/* Bezel ring, then the black face. */
+	circle(cr, x, y, DIAL_RADIUS + 5);
+	set_shading(cr, y - DIAL_RADIUS - 5, y + DIAL_RADIUS + 5, metal_light, metal_dark);
+	cairo_fill(cr);
+	circle(cr, x, y, DIAL_RADIUS);
+	set_colour(cr, glass_black);
+	cairo_fill(cr);
+
+	/* Ticks: eleven of them, every other one longer. The last fifth of
+	 * the scale is marked with a thicker arc, the "caution" range. */
+	cairo_set_source_rgb(cr, HUD_GREEN);
+	cairo_set_line_width(cr, 1.2);
+	for (int i = 0; i <= 10; i++) {
+		double x1, y1, x2, y2;
+		polar(x, y, dial_bearing(i / 10.0), DIAL_RADIUS - (i % 2 == 0 ? 9 : 5), &x1, &y1);
+		polar(x, y, dial_bearing(i / 10.0), DIAL_RADIUS - 2, &x2, &y2);
+		line(cr, x1, y1, x2, y2);
+	}
+	cairo_new_sub_path(cr);
+	cairo_arc(cr, x, y, DIAL_RADIUS - 3, (dial_bearing(0.8) - 90) * DEGREES,
+		(dial_bearing(1.0) - 90) * DEGREES);
+	cairo_set_line_width(cr, 3);
+	cairo_stroke(cr);
+
+	cairo_set_font_size(cr, 9);
+	cairo_set_source_rgb(cr, HUD_DIM);
+	double tx, ty;
+	polar(x, y, dial_bearing(0), DIAL_RADIUS - 17, &tx, &ty);
+	text_centred(cr, "0", tx, ty);
+	polar(x, y, dial_bearing(1), DIAL_RADIUS - 18, &tx, &ty);
+	text_centred(cr, dial->top, tx, ty);
+	cairo_set_source_rgb(cr, HUD_GREEN);
+	text_centred(cr, dial->name, x, y + DIAL_RADIUS * 0.52);
+}
+
+static void draw_dial_needles(struct scene *scene, cairo_t *cr,
+		const struct layout *l) {
+	const struct process_list *list = &scene->processes;
+	const double values[DIAL_COUNT] = {
+		list->cpu_fraction * 100, list->memory_fraction * 100,
+		list->load_average, list->count,
+	};
+	for (int i = 0; i < DIAL_COUNT; i++) {
+		double x, y, tip_x, tip_y;
+		if (!dial_position(l, i, &x, &y)) {
+			return;
+		}
+		polar(x, y, dial_bearing(values[i] / dials[i].full_scale),
+			DIAL_RADIUS - 11, &tip_x, &tip_y);
+		cairo_set_source_rgb(cr, 0.92, 0.94, 0.96); /* a white needle */
+		cairo_set_line_width(cr, 2);
+		line(cr, x, y, tip_x, tip_y);
+		circle(cr, x, y, 4);
+		set_colour(cr, metal_mid);
+		cairo_fill(cr);
+	}
+}
+
 /* ---- the cockpit: everything that never changes ---- */
 
 /* One square screen with a round scope in it. */
@@ -852,6 +786,37 @@ static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 	cairo_set_line_width(cr, 1.5);
 	cairo_stroke(cr);
 
+	/* Bolts along the arch, every 6 degrees. */
+	for (int i = -13; i <= 13; i++) {
+		double angle = (i * 6 - 90) * DEGREES; /* -90 = the top of the arch */
+		double bx = arch_x + (arch_rx + 6) * cos(angle);
+		double by = arch_y + (arch_ry + 6) * sin(angle);
+		circle(cr, bx, by, 2.2);
+		set_colour(cr, metal_light);
+		cairo_fill(cr);
+		circle(cr, bx + 0.6, by + 0.6, 1.0);
+		set_colour(cr, metal_black);
+		cairo_fill(cr);
+	}
+
+	/* Three rear-view mirrors hanging inside the top of the arch. Each
+	 * shows a sliver of sky, darker towards the bottom. */
+	for (int i = -1; i <= 1; i++) {
+		double mx = l.cx + i * 120;
+		double my = arch_y - arch_ry + 26 + (i == 0 ? 0 : 5);
+		rounded_rect(cr, mx - 44, my - 3, 88, 26, 7);
+		set_colour(cr, metal_black);
+		cairo_fill(cr);
+		rounded_rect(cr, mx - 40, my, 80, 20, 5);
+		set_shading(cr, my, my + 20, (struct colour){ 0.62, 0.76, 0.92 },
+			(struct colour){ 0.20, 0.33, 0.52 });
+		cairo_fill(cr);
+		/* A glint across the glass. */
+		cairo_set_source_rgba(cr, 1, 1, 1, 0.35);
+		cairo_set_line_width(cr, 1.5);
+		line(cr, mx - 30, my + 15, mx - 12, my + 4);
+	}
+
 	/* Cockpit sills: the sides of the cockpit rising at the left and
 	 * right edges. */
 	for (int side = -1; side <= 1; side += 2) {
@@ -919,6 +884,41 @@ static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 	cairo_set_source_rgb(cr, 0.02, 0.16, 0.08); /* the projector lens */
 	cairo_fill(cr);
 
+	/* A row of screws under the lip of the glareshield. */
+	for (double x = 30; x < w - 20; x += 62) {
+		if (fabs(x - l.cx) < 96) {
+			continue; /* the HUD projector is in the way */
+		}
+		/* Follow the curve of the lip: lower at the sides. */
+		double along = fabs(x - l.cx) / l.cx;
+		double y = l.panel_top + 4 + 22 * along * along;
+		circle(cr, x, y, 2.4);
+		set_colour(cr, metal_light);
+		cairo_fill(cr);
+		set_colour(cr, metal_black);
+		cairo_set_line_width(cr, 0.8);
+		line(cr, x - 1.6, y - 1.6, x + 1.6, y + 1.6); /* the slot */
+	}
+
+	/* Seams where the panel is made of separate sections, and the dials
+	 * that sit in the outer sections on a wide screen. */
+	double dial_x, dial_y;
+	if (dial_position(&l, 0, &dial_x, &dial_y)) {
+		for (int side = -1; side <= 1; side += 2) {
+			double seam = l.cx + side * (l.cx - l.keys_x + 34);
+			set_colour(cr, metal_black);
+			cairo_set_line_width(cr, 2);
+			line(cr, seam, l.panel_top + 30, seam, l.panel_bottom);
+			cairo_set_source_rgba(cr, 1, 1, 1, 0.10);
+			cairo_set_line_width(cr, 1);
+			line(cr, seam + 1.5, l.panel_top + 30, seam + 1.5, l.panel_bottom);
+		}
+		for (int i = 0; i < DIAL_COUNT; i++) {
+			dial_position(&l, i, &dial_x, &dial_y);
+			draw_dial_face(cr, &dials[i], dial_x, dial_y);
+		}
+	}
+
 	draw_screen(cr, "RADAR", l.radar_x, l.scope_y, false);
 	draw_screen(cr, "RWR", l.rwr_x, l.scope_y, true);
 
@@ -952,6 +952,13 @@ static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 
 /* ---- public functions (see wallpaper.h) ---- */
 
+/* A stopwatch reading, in seconds. */
+static double stopwatch(void) {
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
 void scene_init(struct scene *scene, int width, int height) {
 	scene_finish(scene);
 	scene->width = width;
@@ -959,6 +966,7 @@ void scene_init(struct scene *scene, int width, int height) {
 	scene->scale = height / DESIGN_HEIGHT;
 	scene->hover_key = -1;
 	sky_init();
+	models_init();
 
 	/* ARGB32: has an alpha channel, so the window part stays see-through. */
 	scene->cockpit = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
@@ -971,10 +979,6 @@ void scene_init(struct scene *scene, int width, int height) {
 	scene->cockpit_overlay = overlay_create(
 		(const uint32_t *)cairo_image_surface_get_data(scene->cockpit),
 		cairo_image_surface_get_stride(scene->cockpit) / 4, width, height);
-
-	for (int i = 0; i < AIRCRAFT_COUNT; i++) {
-		scene->aircraft[i] = render_aircraft(scene, &formation[i]);
-	}
 }
 
 void scene_finish(struct scene *scene) {
@@ -983,12 +987,6 @@ void scene_finish(struct scene *scene) {
 	if (scene->cockpit != NULL) {
 		cairo_surface_destroy(scene->cockpit);
 		scene->cockpit = NULL;
-	}
-	for (int i = 0; i < AIRCRAFT_COUNT; i++) {
-		if (scene->aircraft[i] != NULL) {
-			cairo_surface_destroy(scene->aircraft[i]);
-			scene->aircraft[i] = NULL;
-		}
 	}
 }
 
@@ -1014,8 +1012,14 @@ void scene_draw(struct scene *scene, cairo_t *cr, double t) {
 		.scale = scene->scale,
 	};
 	cairo_surface_flush(frame);
+	double started = stopwatch();
 	sky_render(pixels, stride_pixels, &view);
+	double sky_done = stopwatch();
+
+	/* 2. The aircraft, also straight into the pixels. */
+	draw_formation(scene, &l, t, pixels, stride_pixels);
 	cairo_surface_mark_dirty(frame);
+	double models_done = stopwatch();
 
 	/* From here on, draw in design units. */
 	cairo_save(cr);
@@ -1023,19 +1027,21 @@ void scene_draw(struct scene *scene, cairo_t *cr, double t) {
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_NORMAL);
 
-	/* 2. Aircraft and HUD symbols. */
-	draw_formation(scene, cr, &l, t);
+	/* 3. HUD symbols. */
 	draw_hud(cr, &l, &f);
 
-	/* 3. The cached cockpit over the top. */
+	/* 4. The cached cockpit over the top. */
 	cairo_surface_flush(frame);
+	double hud_done = stopwatch();
 	overlay_blit(scene->cockpit_overlay, pixels, stride_pixels);
 	cairo_surface_mark_dirty(frame);
+	double cockpit_done = stopwatch();
 
-	/* 4. The live parts of the panel. */
+	/* 5. The live parts of the panel. */
 	draw_radar(scene, cr, &l, t);
 	int threats = draw_rwr(scene, cr, &l);
 	draw_data_display(scene, cr, &l, threats);
+	draw_dial_needles(scene, cr, &l);
 
 	scene->hover_key = scene->pointer_inside ?
 		key_at(&l, scene->pointer_x, scene->pointer_y) : -1;
@@ -1043,6 +1049,11 @@ void scene_draw(struct scene *scene, cairo_t *cr, double t) {
 		draw_key(cr, &l, scene->hover_key, true);
 	}
 	cairo_restore(cr);
+
+	scene->time_sky += sky_done - started;
+	scene->time_models += models_done - sky_done;
+	scene->time_cockpit += cockpit_done - hud_done;
+	scene->time_vector += (hud_done - models_done) + (stopwatch() - cockpit_done);
 }
 
 void scene_pointer_motion(struct scene *scene, double x, double y) {

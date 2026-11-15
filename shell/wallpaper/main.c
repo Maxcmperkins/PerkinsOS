@@ -16,9 +16,9 @@
  *   while the surface is visible, so a wallpaper hidden behind a
  *   maximized window stops drawing and costs nothing.
  *
- *   A frame-rate cap. Every pixel here is drawn by the CPU, so drawing at
- *   the screen's full refresh rate would waste it. We skip callbacks until
- *   1/FRAMES_PER_SECOND has passed.
+ *   A frame-rate cap. Every pixel here is drawn by the CPU, so we time
+ *   how long each frame takes to draw and wait long enough before the next
+ *   that drawing never uses more than a set share of one CPU core.
  *
  *   Two buffers. The compositor may still be reading the buffer we last
  *   gave it, so we draw the next frame into the other one and swap.
@@ -34,7 +34,12 @@
 #include "wallpaper.h"
 #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
-#define FRAMES_PER_SECOND 12
+/* The most frames we will ever draw in a second, and the largest share of
+ * one CPU core we allow ourselves. On a fast machine (with KVM) the first
+ * limit applies and the picture is smooth; on a slow one the second limit
+ * applies and the frame rate drops instead of starving everything else. */
+#define MAX_FRAMES_PER_SECOND 30
+#define MAX_CPU_SHARE 0.45
 
 struct wallpaper {
 	struct wl_display *display;
@@ -53,6 +58,7 @@ struct wallpaper {
 	struct scene scene;
 	double started_at;        /* clock reading when we started */
 	double last_frame_at;     /* when the last frame was drawn */
+	double frame_interval;    /* how long to wait between frames */
 	bool frame_requested;     /* waiting for the compositor's go-ahead */
 	bool running;
 };
@@ -105,6 +111,42 @@ static void draw(struct wallpaper *wallpaper) {
 	double now = now_seconds();
 	scene_draw(&wallpaper->scene, buffer->cr, now - wallpaper->started_at);
 	wallpaper->last_frame_at = now;
+
+	/* How long did that take? If drawing takes 20 ms and we may use 45%
+	 * of a core, frames must be at least 20 / 0.45 = 44 ms apart. The
+	 * interval follows the measurement gradually (a running average), so
+	 * one slow frame doesn't make the rate lurch. */
+	double cost = now_seconds() - now;
+	double wanted = cost / MAX_CPU_SHARE;
+	if (wanted < 1.0 / MAX_FRAMES_PER_SECOND) {
+		wanted = 1.0 / MAX_FRAMES_PER_SECOND;
+	}
+	wallpaper->frame_interval += (wanted - wallpaper->frame_interval) * 0.2;
+
+	/* Every ten seconds, note the frame rate in the log
+	 * (/var/log/desktop.log), to show what this machine manages. */
+	static double report_at, cost_total;
+	static int frames;
+	frames++;
+	cost_total += cost;
+	if (now - report_at >= 10) {
+		if (report_at != 0) {
+			struct scene *scene = &wallpaper->scene;
+			fprintf(stderr, "wallpaper: %.1f frames/s, %.1f ms to draw each "
+				"(%dx%d): sky %.1f, aircraft %.1f, cockpit %.1f, "
+				"HUD and instruments %.1f\n", frames / (now - report_at),
+				1000 * cost_total / frames, w, h,
+				1000 * scene->time_sky / frames,
+				1000 * scene->time_models / frames,
+				1000 * scene->time_cockpit / frames,
+				1000 * scene->time_vector / frames);
+			scene->time_sky = scene->time_models = 0;
+			scene->time_cockpit = scene->time_vector = 0;
+		}
+		report_at = now;
+		frames = 0;
+		cost_total = 0;
+	}
 	cairo_surface_flush(buffer->cairo_surface);
 
 	/* Ask to be told when to draw again. The request is part of the
@@ -274,14 +316,14 @@ int main(void) {
 	zwlr_layer_surface_v1_set_exclusive_zone(wallpaper.layer_surface, -1);
 	wl_surface_commit(wallpaper.surface);
 
-	const double frame_interval = 1.0 / FRAMES_PER_SECOND;
+	wallpaper.frame_interval = 1.0 / MAX_FRAMES_PER_SECOND;
 	while (wallpaper.running) {
 		/* How long until the next frame is due? While we are waiting for
 		 * the compositor's go-ahead there is no deadline: sleep until an
 		 * event arrives (-1). */
 		int timeout_ms = -1;
 		if (!wallpaper.frame_requested) {
-			double due = wallpaper.last_frame_at + frame_interval;
+			double due = wallpaper.last_frame_at + wallpaper.frame_interval;
 			double wait = due - now_seconds();
 			timeout_ms = wait > 0 ? (int)(wait * 1000) + 1 : 0;
 		}
@@ -291,7 +333,8 @@ int main(void) {
 		/* Draw when both are true: the compositor is ready for a frame,
 		 * and enough time has passed since the last one. */
 		if (!wallpaper.frame_requested &&
-				now_seconds() - wallpaper.last_frame_at >= frame_interval) {
+				now_seconds() - wallpaper.last_frame_at >=
+					wallpaper.frame_interval) {
 			draw(&wallpaper);
 		}
 	}

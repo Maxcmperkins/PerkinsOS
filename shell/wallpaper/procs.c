@@ -118,4 +118,41 @@ void processes_update(struct process_list *list, double now) {
 	memcpy(list->items, fresh, sizeof(fresh[0]) * count);
 	list->count = count;
 	list->sampled_at = now;
+
+	/* Whole-machine figures for the dials. CPU: every program's share
+	 * added up, out of 100% per CPU core. */
+	double total = 0;
+	for (int i = 0; i < count; i++) {
+		total += list->items[i].cpu_percent;
+	}
+	long cores = sysconf(_SC_NPROCESSORS_ONLN);
+	list->cpu_fraction = total / (100.0 * (cores > 0 ? cores : 1));
+	if (list->cpu_fraction > 1) {
+		list->cpu_fraction = 1;
+	}
+
+	/* Memory: /proc/meminfo has one "Name:   12345 kB" line per figure. */
+	FILE *file = fopen("/proc/meminfo", "r");
+	if (file != NULL) {
+		char line[128];
+		long memory_total = 0, memory_available = 0;
+		while (fgets(line, sizeof(line), file) != NULL) {
+			sscanf(line, "MemTotal: %ld", &memory_total);
+			sscanf(line, "MemAvailable: %ld", &memory_available);
+		}
+		fclose(file);
+		if (memory_total > 0) {
+			list->memory_fraction =
+				1.0 - (double)memory_available / memory_total;
+		}
+	}
+
+	/* Load average: the first number in /proc/loadavg. */
+	file = fopen("/proc/loadavg", "r");
+	if (file != NULL) {
+		if (fscanf(file, "%lf", &list->load_average) != 1) {
+			list->load_average = 0;
+		}
+		fclose(file);
+	}
 }
