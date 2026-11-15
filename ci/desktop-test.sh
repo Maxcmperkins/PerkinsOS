@@ -101,19 +101,29 @@ if grep -aq '^compositor=perkinsos' "$LOG"; then
 	mouse_move 512 150        # move away: a lock must outlive the hover
 	sleep 1.5
 	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/radar-lock-test.png > /dev/null
-	# The "TGT LOCKED" details appear right of the scope. Count bright
-	# green pixels there: clouds are dim, text is full brightness.
+	# "TGT LOCKED" and the program's name appear in the data display
+	# between the two screens. Count full-brightness green pixels there:
+	# with no target it only holds dim hint text.
 	python3 - output/radar2-test.png output/radar-lock-test.png <<'PY' || fail "clicking a radar contact did not lock it"
 import sys
 sys.path.insert(0, "ci")
 from gif import read_png
 def bright(path):
     w, h, rgb = read_png(path)
-    return sum(1 for y in range(560, 650) for x in range(228, 340)
+    return sum(1 for y in range(602, 700) for x in range(276, 500)
                if rgb[(y * w + x) * 3 + 1] > 200)
 sys.exit(0 if bright(sys.argv[1]) < 10 and bright(sys.argv[2]) > 60 else 1)
 PY
 	echo "ok: clicking a radar contact at $CONTACT locked it"
+
+	# Cockpit keys: the buttons on the instrument panel start apps too.
+	# SYSTEM INFO is the third key (see key_position() in scene.c).
+	mouse_click 678 553
+	count cockpitkey perkinsos-sysinfo
+	grep -aq '^cockpitkey=1' "$LOG" || fail "clicking the cockpit's SYSTEM INFO key did not start the app"
+	echo "ok: clicking SYSTEM INFO on the cockpit panel started the app"
+	press alt-q
+	count cockpitclosed perkinsos-sysinfo
 
 	# Maximize: a maximized window fills the screen except the dock. The
 	# terminal reports its own size in character cells once it has been

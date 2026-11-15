@@ -6,14 +6,16 @@ Usage: find-contact.py SHOT1.png SHOT2.png   -> prints "X Y"
 The two screenshots are taken a moment apart. A contact is a bright green
 dot that is in the same place in both; the sweep line and its afterglow
 have moved in between, so they are ignored. Looks inside the radar scope
-only (bottom-left of a 1024x768 screen), away from its cross lines.
+only (the left screen of the cockpit panel on a 1024x768 display; the
+numbers below match layout_for() in shell/wallpaper/scene.c), away from
+its cross lines.
 """
 import sys
 
 sys.path.insert(0, sys.path[0])
 from gif import read_png
 
-RADAR_X, RADAR_Y, RADIUS = 128, 606, 84
+RADAR_X, RADAR_Y, RADIUS = 136, 612, 78
 
 
 def main():

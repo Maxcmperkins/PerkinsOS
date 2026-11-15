@@ -1,6 +1,6 @@
 # PerkinsOS
 
-A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. It is themed as a fighter-jet head-up display: the wallpaper is an animated formation of a Typhoon, Tornado and Lightning, with a radar and a radar warning receiver that show the machine's running programs.
+A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon, Tornado and Lightning fly in formation ahead of you, seen through the HUD, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps.
 
 [![CI](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml/badge.svg)](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml)
 
@@ -47,12 +47,14 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Click a window to focus it. Drag a title bar to move a window.
 
-The instruments on the wallpaper are live:
+The cockpit is live:
 
-- **Radar**: every contact is a running program. Older programs sit near the centre; one you have just started appears at the edge. Bigger dots use more memory. Hover a contact to see what it is; click to lock it and keep its name, PID, memory and CPU on screen. Click again to break the lock.
-- **RWR**: every symbol is a program using the CPU right now, labelled with the first two letters of its name. The busier it is, the closer to the centre; the busiest gets a diamond.
+- **Keys** on the instrument panel start apps, like the dock's buttons. They light up under the pointer.
 
-The heading, speed and altitude are a simulation; the radar and RWR are real data from `/proc`.
+- **Radar** (left screen): every contact is a running program. Older programs sit near the centre; one you have just started appears at the edge. Bigger dots use more memory. Hover a contact to see what it is in the data display between the screens; click to lock it and keep its name, PID, memory and CPU there. Click again to break the lock.
+- **RWR** (right screen): every symbol is a program using the CPU right now, labelled with the first two letters of its name. The busier it is, the closer to the centre; the busiest gets a diamond.
+
+The flight (heading, roll, speed, altitude) is a simulation; the radar and RWR are real data from `/proc`.
 
 ## Build and run
 
