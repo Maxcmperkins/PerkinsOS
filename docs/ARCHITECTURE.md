@@ -54,6 +54,8 @@ Both use the same handshake: the client commits with no buffer, the compositor r
 - `apps.h`: the list of apps shown by both the dock and the launcher.
 - `theme.h`: the HUD colours, font and line weight used by every client.
 
+The wallpaper is the one client that animates. It never draws on its own timer: after each frame it asks the compositor for a **frame callback** and draws the next frame when that arrives, capped at 12 frames a second. The compositor only sends frame callbacks to visible surfaces, so a wallpaper hidden behind a maximized window stops drawing. It alternates between two buffers so it never draws into the one the compositor is showing. Its radar and RWR read the process list from `/proc` every two seconds.
+
 ## How a frame reaches the screen
 
 1. A client draws into its shared-memory buffer and sends `wl_surface.attach` + `commit`.
@@ -87,10 +89,10 @@ One number pins everything: `BUILDROOT_VERSION` in the `Makefile` (2026.02.3, an
 
 ## Tests
 
-All tests boot the real image in QEMU with no window and drive it two ways: typing into the serial console through a FIFO, and pressing keys on the virtual keyboard through QEMU's monitor socket (`ci/lib.sh`).
+All tests boot the real image in QEMU with no window and drive it three ways: typing into the serial console through a FIFO, pressing keys on the virtual keyboard through QEMU's monitor socket, and moving and clicking the mouse through QEMU's QMP socket (`ci/lib.sh`, `ci/mouse.py`).
 
 - `make test`: reaches `perkinsos login:`, logs in, powers off.
-- `make test-desktop`: the desktop came up at boot; the screen isn't blank; Alt+Enter opens a terminal and Alt+Q closes it; layer-shell is advertised; Alt+P opens the launcher, typing filters it and Enter starts System Info; a maximized window fills the screen and stops at the dock. Screenshots are left in `output/*-test.png`.
+- `make test-desktop`: the desktop came up at boot; the screen isn't blank; Alt+Enter opens a terminal and Alt+Q closes it; layer-shell is advertised; Alt+P opens the launcher, typing filters it and Enter starts System Info; clicking a dock button starts its program; the wallpaper animates and clicking a radar contact locks it; a maximized window fills the screen and stops at the dock. Screenshots are left in `output/*-test.png`.
 - `make demo`: records `docs/demo.gif` the same way.
 
 GitHub Actions (`.github/workflows/ci.yml`) builds the image from scratch and runs both tests on every push.

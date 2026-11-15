@@ -1,6 +1,6 @@
 # PerkinsOS
 
-A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. It is themed as a fighter-jet head-up display, with a Tornado, Typhoon and Lightning on the wallpaper.
+A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. It is themed as a fighter-jet head-up display: the wallpaper is an animated formation of a Typhoon, Tornado and Lightning, with a radar and a radar warning receiver that show the machine's running programs.
 
 [![CI](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml/badge.svg)](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml)
 
@@ -47,6 +47,13 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Click a window to focus it. Drag a title bar to move a window.
 
+The instruments on the wallpaper are live:
+
+- **Radar**: every contact is a running program. Older programs sit near the centre; one you have just started appears at the edge. Bigger dots use more memory. Hover a contact to see what it is; click to lock it and keep its name, PID, memory and CPU on screen. Click again to break the lock.
+- **RWR**: every symbol is a program using the CPU right now, labelled with the first two letters of its name. The busier it is, the closer to the centre; the busiest gets a diamond.
+
+The heading, speed and altitude are a simulation; the radar and RWR are real data from `/proc`.
+
 ## Build and run
 
 Requires Linux (WSL2 Ubuntu on Windows works). Setup is in [docs/SETUP.md](docs/SETUP.md).
@@ -67,7 +74,7 @@ make shell          # rebuild only shell/ (seconds)
 buildroot/    Buildroot external tree: configs, packages, rootfs overlay, init
 compositor/   the Wayland compositor
 shell/        dock, launcher, apps, and code they share
-ci/           headless tests, screenshot and GIF tools
+ci/           headless tests; screenshot, mouse and GIF tools
 docs/         plan, setup, architecture, week-by-week notes, write-up
 ```
 
@@ -87,7 +94,6 @@ docs/         plan, setup, architecture, week-by-week notes, write-up
 Ideas parked here so they don't derail the plan.
 
 - Key repeat in the launcher, and clicking a result to start it
-- Animate the wallpaper: a moving horizon, or live numbers in the HUD read-outs
 - Icons on the dock; System Info as cockpit gauges
 - Server-side title bars, so every window gets the same one
 - Alt+drag to move a window from anywhere
