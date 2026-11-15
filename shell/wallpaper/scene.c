@@ -193,33 +193,41 @@ static void draw_outside(struct scene *scene, cairo_t *cr,
 	enter_world(cr, l, f);
 	const double far = 2000; /* big enough to cover the screen when rolled */
 
-	/* A band of haze just above the horizon. */
-	cairo_pattern_t *haze = cairo_pattern_create_linear(0, -90, 0, 0);
-	cairo_pattern_add_color_stop_rgba(haze, 0.0, HUD_GREEN, 0.0);
-	cairo_pattern_add_color_stop_rgba(haze, 1.0, HUD_GREEN, 0.10);
-	cairo_set_source(cr, haze);
-	cairo_rectangle(cr, -far, -90, 2 * far, 90);
-	cairo_fill(cr);
-	cairo_pattern_destroy(haze);
-
-	/* The cloud deck below: brightest at the horizon, darker close to. */
-	cairo_pattern_t *deck = cairo_pattern_create_linear(0, 0, 0, 340);
-	cairo_pattern_add_color_stop_rgb(deck, 0.0, 0.035, 0.170, 0.080);
-	cairo_pattern_add_color_stop_rgb(deck, 1.0, 0.012, 0.060, 0.030);
-	cairo_set_source(cr, deck);
-	cairo_rectangle(cr, -far, 0, 2 * far, far);
-	cairo_fill(cr);
-	cairo_pattern_destroy(deck);
+	/* Haze above the horizon and the cloud deck below it, each as a few
+	 * flat bands that get brighter towards the horizon. A smooth gradient
+	 * would look a little better, but it has to be computed for every
+	 * pixel of every frame; flat fills are several times cheaper. */
+	static const struct { double from, to, level; } haze[] = {
+		{ -84, -52, 0.025 }, { -52, -26, 0.05 }, { -26, 0, 0.085 },
+	};
+	for (int i = 0; i < 3; i++) {
+		cairo_set_source_rgba(cr, HUD_GREEN, haze[i].level);
+		cairo_rectangle(cr, -far, haze[i].from, 2 * far,
+			haze[i].to - haze[i].from);
+		cairo_fill(cr);
+	}
+	static const struct { double from, r, g, b; } deck[] = {
+		{ 0, 0.035, 0.170, 0.080 }, { 14, 0.030, 0.145, 0.068 },
+		{ 36, 0.025, 0.118, 0.056 }, { 72, 0.020, 0.094, 0.045 },
+		{ 130, 0.015, 0.074, 0.036 },
+	};
+	for (int i = 0; i < 5; i++) {
+		/* Each band runs from its start to far below; later bands paint
+		 * over the lower part of earlier ones. */
+		cairo_set_source_rgb(cr, deck[i].r, deck[i].g, deck[i].b);
+		cairo_rectangle(cr, -far, deck[i].from, 2 * far, far);
+		cairo_fill(cr);
+	}
 
 	/* Cloud tops rushing towards you. Each puff has a fixed sideways
 	 * position and a distance that shrinks with time and wraps round.
 	 * Perspective is one division: things at distance z are drawn 1/z as
 	 * big and 1/z as far from the horizon. That single rule makes puffs
 	 * crawl near the horizon and sweep past underneath you. */
-	for (int i = 0; i < 34; i++) {
+	for (int i = 0; i < 26; i++) {
 		double sideways = (random_for(i * 3) - 0.5) * 2.6;
 		double progress = fmod(random_for(i * 3 + 1) + t * 0.085, 1.0);
-		double z = 1.0 - 0.93 * progress;       /* 1 = far, 0.07 = close */
+		double z = 1.0 - 0.90 * progress;       /* 1 = far, 0.10 = close */
 		double x = sideways * 330 / z;
 		double y = 20 / z;
 		double rx = (26 + 22 * random_for(i * 3 + 2)) / z;
@@ -338,7 +346,7 @@ struct wingman {
 	void (*draw)(cairo_t *cr, double s, double glow);
 	double offset_x, offset_y; /* from the aim point, in pixels */
 	double size;               /* half wingspan: nearer aircraft are bigger */
-	bool label_beside;         /* name by the wingtip instead of underneath */
+	bool label_beside;         /* name beside the fin instead of underneath */
 };
 
 /* The leader is dead ahead, so you see it through the HUD glass. It sits
@@ -376,15 +384,30 @@ static void draw_formation(cairo_t *cr, const struct layout *l,
 
 		cairo_set_source_rgb(cr, HUD_DIM);
 		if (wingman->label_beside) {
-			draw_text(cr, wingman->name, x + wingman->size * 0.55,
-				y - wingman->size * 0.30);
+			draw_text(cr, wingman->name, x + 12, y - wingman->size * 0.52);
 		} else {
 			text_centred(cr, wingman->name, x, y + wingman->size * 0.5 + 12);
 		}
 	}
 }
 
-/* ---- HUD symbology, drawn on the glass ---- */
+/* ---- HUD ---- */
+
+/* The HUD's frame: two posts rising from the panel, and the glass they
+ * hold. The glass is only an outline: you look through it. */
+static void draw_hud_frame(cairo_t *cr, const struct layout *lp) {
+	struct layout l = *lp;
+	cairo_set_source_rgb(cr, HUD_DIM);
+	cairo_set_line_width(cr, 3);
+	line(cr, l.hud_x, l.hud_y + 26, l.hud_x - 10, l.panel_top);
+	line(cr, l.hud_x + l.hud_w, l.hud_y + 26, l.hud_x + l.hud_w + 10,
+		l.panel_top);
+	rounded_rect(cr, l.hud_x, l.hud_y, l.hud_w, l.hud_h, 26);
+	cairo_set_line_width(cr, HUD_LINE);
+	cairo_stroke(cr);
+}
+
+/* The symbols projected on the glass. */
 
 static void draw_hud(cairo_t *cr, const struct layout *l,
 		const struct flight *f) {
@@ -801,20 +824,6 @@ static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 	cairo_set_line_width(cr, 2);
 	cairo_stroke(cr);
 
-	/* HUD: two posts rising from the panel, and the glass they hold. The
-	 * glass is only an outline with a hint of tint: you look through it. */
-	cairo_set_source_rgb(cr, HUD_DIM);
-	cairo_set_line_width(cr, 3);
-	line(cr, l.hud_x, l.hud_y + 26, l.hud_x - 10, l.panel_top);
-	line(cr, l.hud_x + l.hud_w, l.hud_y + 26, l.hud_x + l.hud_w + 10,
-		l.panel_top);
-	rounded_rect(cr, l.hud_x, l.hud_y, l.hud_w, l.hud_h, 26);
-	cairo_set_source_rgba(cr, HUD_GREEN, 0.035);
-	cairo_fill_preserve(cr);
-	cairo_set_source_rgb(cr, HUD_DIM);
-	cairo_set_line_width(cr, HUD_LINE);
-	cairo_stroke(cr);
-
 	/* Instrument panel. Its top edge (the glareshield) rises in the
 	 * middle, where the HUD sits. */
 	cairo_move_to(cr, 0, l.panel_top + 16);
@@ -887,17 +896,36 @@ void scene_draw(struct scene *scene, cairo_t *cr, double t) {
 	 * don't spend time drawing sky that the panel will cover. */
 	cairo_save(cr);
 	cairo_rectangle(cr, 0, 0, scene->width, l.panel_top + 18);
+	/* Antialiasing a clip edge that is already on the pixel grid costs
+	 * time and changes nothing. */
+	cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
 	cairo_clip(cr);
+	cairo_set_antialias(cr, CAIRO_ANTIALIAS_DEFAULT);
 	draw_outside(scene, cr, &l, &f, t);
 	draw_formation(cr, &l, &f, t);
 	draw_hud(cr, &l, &f);
 	cairo_restore(cr);
 
-	/* Lay the cached cockpit over the top. Where the picture so far was
-	 * clipped away (the panel), SOURCE would be needed to overwrite old
-	 * pixels; the panel is fully opaque, so plain blending does the same. */
+	draw_hud_frame(cr, &l);
+
+	/* Lay the cached cockpit over the frame. Blending a full-screen image
+	 * every frame is the single most expensive thing we could do, and
+	 * most of it would be blending nothing (the window) or something
+	 * opaque (the panel). So do it in three pieces:
+	 *   - the two top corners, where the canopy frame is: blend
+	 *   - a strip along the panel's curved top edge: blend
+	 *   - the rest of the panel: plain copy (SOURCE), no blending */
+	double strip_top = l.panel_top - 12, strip_bottom = l.panel_top + 18;
 	cairo_set_source_surface(cr, scene->cockpit, 0, 0);
-	cairo_paint(cr);
+	cairo_rectangle(cr, 0, 0, 200, 120);
+	cairo_rectangle(cr, scene->width - 200, 0, 200, 120);
+	cairo_rectangle(cr, 0, strip_top, scene->width, strip_bottom - strip_top);
+	cairo_fill(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+	cairo_rectangle(cr, 0, strip_bottom, scene->width,
+		scene->height - strip_bottom);
+	cairo_fill(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
 	/* The live parts of the panel. */
 	draw_radar(scene, cr, &l, t);
