@@ -4,14 +4,16 @@ Draft by Claude; Max edits. Last updated 16 November 2026.
 
 An earlier version of this plan lives at https://claude.ai/artifact/21SGbetMZKTBkYRAKnST1U. That page has not been updated; this file is the current one.
 
+The plan for what comes next, using PerkinsOS instead of Windows, is in [PLAN-DAILY-DRIVER.md](PLAN-DAILY-DRIVER.md).
+
 ## Where things stand
 
 The original eight-week plan is finished, and the project has moved into a second phase that the plan never covered: turning the desktop into the view from a fighter cockpit.
 
 - **Works today:** `make run` boots a Buildroot Linux image in QEMU straight to the PerkinsOS desktop. Both automated tests pass.
 - **On GitHub:** everything up to the end of week 8 (commit `74cd93b`), and CI passed on it.
-- **Only on Max's machine:** the cockpit phase, 13 commits. GitHub still shows the old blue desktop.
-- **Main problem:** frame rate. About 13 frames a second at 1920x1080, because KVM is not enabled.
+- **Only on Max's machine:** the cockpit phase and everything after it. GitHub still shows the old blue desktop.
+- **Frame rate:** about 13 frames a second at 1920x1080 without KVM. Max switched KVM on by hand on 16 November (`sudo chmod 666 /dev/kvm`); that resets when WSL restarts, and the frame rate with it has not been measured yet.
 
 ## Done means (original goals)
 
@@ -49,6 +51,13 @@ Not in the original plan. Each step came from Max looking at the result and aski
 3. **First-person cockpit view**: jets ahead of you, a HUD, an instrument panel, and panel keys that start apps.
 4. **Realistic look at 1920x1080**: blue sky over sea and cloud, shaded jets, grey cockpit with green displays. The cockpit scales to any resolution.
 5. **3D aircraft**: the Typhoon, Tornado and Lightning became 3D models drawn by a software renderer written for this project. Four live dials and more cockpit detail were added. The frame rate now adapts to the machine instead of being capped at 12.
+6. **Downloaded aircraft** (16 November): the Typhoon and an F-35 are now models from Sketchfab, converted by `tools/glb2mesh.py` into a simple mesh file that the wallpaper loads. The Tornado, the Lightning and all the code that built aircraft from parts were removed. Two jets fly, not three.
+7. **A more realistic cockpit**: app buttons round the edge of a centre display, a smaller HUD glass that leans back, a padded hood over the panel, and four small standby gauges on wide screens.
+8. **Installed apps**: the launcher lists every app that has a `.desktop` file, and a pins file adds apps to the dock and the cockpit.
+
+### Phase 3: use it instead of Windows (16 November 2026 onwards)
+
+See [PLAN-DAILY-DRIVER.md](PLAN-DAILY-DRIVER.md) and [ROADMAP.md](ROADMAP.md). Stage 1 is done: the desktop runs on Ubuntu 26.04 in a VM and Firefox starts from the launcher.
 
 ## Decisions made
 
@@ -63,8 +72,8 @@ Not in the original plan. Each step came from Max looking at the result and aski
 | Who writes the code | Claude, at Max's request | Changed on 13 November; `CLAUDE.md` still says Max writes `compositor/` and `shell/` |
 | Theme | Fighter cockpit, green displays | Max's choice |
 | Instruments | Show real machine data, not decoration | Makes the radar, RWR and dials useful |
-| Art | Everything drawn by code, no image or model files | No licensing questions in a public repo. **Max now wants to change this for the aircraft (see below).** |
-| Aircraft | 3D meshes built in code, software renderer in whole-number maths | Floating point is slow without KVM |
+| Art | Drawn by code, except the two aircraft, which are downloaded models | Max wanted real aircraft. Their licences have to allow a public repo (see below) |
+| Aircraft | Downloaded models, converted to mesh files during development; software renderer in whole-number maths | Floating point is slow without KVM |
 | Resolution | 1920x1080 by default; tests at 1024x768 | HD was asked for; tests click fixed pixel positions |
 
 ## Decisions to make
@@ -75,15 +84,11 @@ In rough order of how much they block.
 
 Without it the CPU itself is emulated and the desktop reaches about 13 frames a second at 1080p. This needs Max's password, so only he can do it: `sudo chmod 666 /dev/kvm` to try it, and step 4 of [SETUP.md](SETUP.md) to make it permanent. It has not been tested on this laptop. Almost every other decision here depends on how fast things are afterwards.
 
-### 2. Real 3D models
+### 2. Real 3D models: done, with one thing open
 
-Max wants to use real aircraft models in place of the ones built in code. Choices to make:
+Decided on 16 November: glTF models from Sketchfab, converted during development by `tools/glb2mesh.py` (not in the VM and not during the build), kept under 8,000 triangles each, with one colour per vertex taken from the model's texture.
 
-- **Which models, and their licence.** The repo is public, so each model must allow redistribution. Options: models Max makes himself; CC0 or CC-BY models (CC-BY needs a credit in the README); or keeping model files out of the repo and loading them from a folder that is not committed. Most free models found by searching are "personal use only" and cannot be committed. Many paid ones forbid redistribution too.
-- **File format.** OBJ is the simplest to read (plain text: points, then triangles) and every 3D tool exports it. glTF is the modern standard and carries materials, but needs a much bigger loader. Recommendation: start with OBJ.
-- **How detailed.** The current models are a few thousand triangles each and the three together take about 14 ms a frame at 1080p without KVM. A typical downloaded aircraft is 50,000 to 500,000 triangles. Without a GPU that is too slow, so models need reducing (in Blender: Decimate) to roughly 5,000 to 20,000 triangles each. The budget goes up if KVM works.
-- **Colour.** The renderer has no texture mapping: it colours each corner of a triangle and blends. Options: one paint colour per part (works now); per-material colours from the model file (small addition); or real textures (a larger addition to the renderer, and slower).
-- **Converted when?** Parse the model file in the VM at start-up (simple, slower boot), or convert it during the build into a compact form (faster boot, one more build step). Recommendation: convert during the build.
+Still open: **the F-35 model's licence is not recorded**, and the Typhoon's is CC BY-NC (non-commercial use only). Until the F-35's licence is known and allows redistribution, its mesh file should not be pushed to the public repo.
 
 ### 3. Software rendering or the graphics card
 
@@ -91,7 +96,7 @@ Everything is drawn by the CPU. The image already contains Mesa's virgl driver, 
 
 ### 4. Push the cockpit work
 
-13 commits are local only. Pushing also runs CI on them for the first time. One thing to check first: the demo GIF and screenshots add about 1 MB per re-recording to the repo's history.
+The cockpit work and everything since is local only. Pushing also runs CI on it for the first time. One thing to check first: the demo GIF and screenshots add about 1 MB per re-recording to the repo's history.
 
 ### 5. Update `CLAUDE.md`
 
@@ -106,10 +111,7 @@ It says Max writes `compositor/` and `shell/` and that scope is fixed by this pl
 
 ## Next steps
 
-1. Max tries KVM and reports the frame rate from `/var/log/desktop.log`.
-2. Max picks one aircraft model and checks its licence. Claude adds an OBJ loader and a build step, and reports the frame rate with it.
-3. Decide between software and GPU rendering from those two numbers.
-4. Push, once Max is happy with how it looks.
+See [ROADMAP.md](ROADMAP.md), starting at milestone M0.
 
 ## Later (parked)
 

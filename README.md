@@ -1,6 +1,6 @@
 # PerkinsOS
 
-A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon, Tornado and Lightning fly in formation ahead of you over sea and cloud, seen through the HUD, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps. The aircraft are 3D models, lit and drawn by a small software renderer. Everything on screen is produced by code in this repo; there are no image or model files.
+A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon and an F-35 fly in formation ahead of you over sea and cloud, seen through the HUD, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps. The aircraft are 3D models, lit and drawn by a small software renderer. They are downloaded models converted to a simple mesh format (see Credits).
 
 [![CI](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml/badge.svg)](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml)
 
@@ -82,6 +82,7 @@ make shell          # rebuild only shell/ (seconds)
 
 ```
 buildroot/    Buildroot external tree: configs, packages, rootfs overlay, init
+distro/       build and test VM for running the desktop on Ubuntu instead
 compositor/   the Wayland compositor
 shell/        dock, launcher, apps, and code they share
 ci/           headless tests; screenshot, mouse and GIF tools
@@ -99,9 +100,16 @@ docs/         plan, setup, architecture, week-by-week notes, write-up
 - [x] Week 7: boot to desktop + CI
 - [x] Week 8: polish + write-up
 
+## Credits
+
+The Typhoon and F-35 meshes in `buildroot/overlay/usr/share/perkinsos/models/` are converted from Sketchfab models with [tools/glb2mesh.py](tools/glb2mesh.py):
+
+- Eurofighter Typhoon (UK) by 42manako, [CC BY-NC 4.0](http://creativecommons.org/licenses/by-nc/4.0/): https://sketchfab.com/3d-models/eurofighter-typhoon-uk-716c3c241f4b42059ec976de5cfb3e34
+- F-35 Lightning II: TODO author, licence and link
+
 ## Later (not now)
 
-Ideas parked here so they don't derail the plan.
+Ideas parked here so they don't derail the plan. The long-term goal, running real apps and using this instead of Windows, has its own plan, [docs/PLAN-DAILY-DRIVER.md](docs/PLAN-DAILY-DRIVER.md), and a roadmap of milestones, [docs/ROADMAP.md](docs/ROADMAP.md).
 
 - Key repeat in the launcher, and clicking a result to start it
 - Icons on the dock; System Info as cockpit gauges
