@@ -1,0 +1,20 @@
+The aircraft in this folder are adapted from other people's 3D models.
+They are NOT covered by the licence of the rest of PerkinsOS.
+
+typhoon.mesh
+  From: "Eurofighter Typhoon (UK)" by 42manako
+  https://sketchfab.com/3d-models/eurofighter-typhoon-uk-716c3c241f4b42059ec976de5cfb3e34
+  Licence: Creative Commons Attribution-NonCommercial 4.0
+  http://creativecommons.org/licenses/by-nc/4.0/
+
+f35.mesh
+  From: "F-35 Lightning II - Fighter Jet - Free" by bohmerang
+  https://sketchfab.com/3d-models/f-35-lightning-ii-fighter-jet-free-b1ab1c0090e34b0fbfe667e706023e6d
+  Licence: Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+  http://creativecommons.org/licenses/by-nc-sa/4.0/
+
+Changes made (by tools/glb2mesh.py and Blender): converted to PerkinsOS's
+mesh format, reduced in detail, landing gear removed, textures replaced by
+one colour per vertex sampled from the original texture.
+
+Non-commercial use only.
