@@ -78,7 +78,7 @@ void overlay_blit(const struct overlay *overlay, uint32_t *pixels,
 
 /* ---- model.c: the aircraft ---- */
 
-enum { MODEL_TORNADO, MODEL_LIGHTNING, MODEL_TYPHOON, MODEL_COUNT };
+enum { MODEL_F35, MODEL_TYPHOON, MODEL_COUNT };
 
 /* Where an aircraft is and which way it is turned. Distances are metres
  * from the camera: x right, y up, z ahead. Angles are radians. */
@@ -93,7 +93,8 @@ struct model_pose {
 	double glow;   /* brightness of the exhaust, around 1.0 */
 };
 
-/* Build the three aircraft. Call once before model_draw(). */
+/* Load the aircraft. Call once before model_draw(). An
+ * aircraft whose file is missing is left out of the picture. */
 void models_init(void);
 
 /* Draw one aircraft straight into a frame's pixels. */

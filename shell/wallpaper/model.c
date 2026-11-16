@@ -1,14 +1,9 @@
 /*
- * The aircraft: 3D models, built and drawn entirely in software.
+ * The aircraft: 3D models, drawn entirely in software.
  *
  * A model is a "mesh": a list of points in space (vertices) and a list of
- * triangles joining them. Nothing is loaded from a file. Each aircraft is
- * assembled at start-up from a few kinds of part:
- *
- *   loft    a body made by joining a row of cross-sections, like the ribs
- *           of a boat: fuselage, canopy, engine pipes, missiles
- *   plate   a thin flat panel with a ridge down the middle: wings, fins,
- *           tailplanes, canards
+ * triangles joining them. The meshes are read from .mesh files, made from
+ * downloaded models by tools/glb2mesh.py (see load_mesh()).
  *
  * Drawing a mesh each frame (the "pipeline") is four steps:
  *
@@ -29,7 +24,9 @@
  * has its nose towards +z, and the camera looks along +z, so we see tails.
  */
 #include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -65,49 +62,21 @@ struct fixed_vertex {
 struct mesh {
 	struct fixed_vertex *fixed;
 	struct vertex *vertices;
-	int vertex_count, vertex_capacity;
+	int vertex_count;
 	int *triangles; /* three vertex numbers per triangle */
-	int triangle_count, triangle_capacity;
+	int triangle_count;
 	/* Where the engine exhausts are, for the glow drawn over the top. */
 	struct vec3 nozzles[2];
 	float nozzle_radius;
 };
-
-struct paint { uint8_t r, g, b, kind; };
-
-static const struct paint grey = { 150, 158, 168, KIND_PAINT };
-static const struct paint grey_dark = { 104, 110, 120, KIND_PAINT };
-static const struct paint radome = { 84, 88, 96, KIND_PAINT };
-static const struct paint bare_metal = { 196, 201, 208, KIND_PAINT };
-static const struct paint hot_metal = { 92, 86, 82, KIND_PAINT };
-static const struct paint soot = { 22, 20, 20, KIND_PAINT };
-static const struct paint glass = { 44, 66, 92, KIND_GLASS };
-static const struct paint flame = { 255, 176, 88, KIND_GLOW };
-static const struct paint white = { 214, 216, 220, KIND_PAINT };
 
 static struct vec3 vec(float x, float y, float z) {
 	struct vec3 v = { x, y, z };
 	return v;
 }
 
-static struct vec3 sub(struct vec3 a, struct vec3 b) {
-	return vec(a.x - b.x, a.y - b.y, a.z - b.z);
-}
-
-static struct vec3 lerp(struct vec3 a, struct vec3 b, float t) {
-	return vec(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t,
-		a.z + (b.z - a.z) * t);
-}
-
 static float dot(struct vec3 a, struct vec3 b) {
 	return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-/* The cross product: a vector at right angles to both a and b. For two
- * edges of a flat face, that is the direction the face points. */
-static struct vec3 cross(struct vec3 a, struct vec3 b) {
-	return vec(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z,
-		a.x * b.y - a.y * b.x);
 }
 
 static struct vec3 normalise(struct vec3 v) {
@@ -118,388 +87,9 @@ static struct vec3 normalise(struct vec3 v) {
 	return vec(v.x / length, v.y / length, v.z / length);
 }
 
-static int add_vertex(struct mesh *mesh, struct vec3 position,
-		struct vec3 normal, struct paint paint) {
-	if (mesh->vertex_count == mesh->vertex_capacity) {
-		mesh->vertex_capacity = mesh->vertex_capacity ?
-			mesh->vertex_capacity * 2 : 256;
-		mesh->vertices = realloc(mesh->vertices,
-			mesh->vertex_capacity * sizeof(struct vertex));
-	}
-	struct vertex *v = &mesh->vertices[mesh->vertex_count];
-	v->position = position;
-	v->normal = normalise(normal);
-	v->r = paint.r;
-	v->g = paint.g;
-	v->b = paint.b;
-	v->kind = paint.kind;
-	return mesh->vertex_count++;
-}
+/* ---- the aircraft ---- */
 
-static void add_triangle(struct mesh *mesh, int a, int b, int c) {
-	if (mesh->triangle_count == mesh->triangle_capacity) {
-		mesh->triangle_capacity = mesh->triangle_capacity ?
-			mesh->triangle_capacity * 2 : 512;
-		mesh->triangles = realloc(mesh->triangles,
-			mesh->triangle_capacity * 3 * sizeof(int));
-	}
-	int *t = &mesh->triangles[mesh->triangle_count * 3];
-	t[0] = a;
-	t[1] = b;
-	t[2] = c;
-	mesh->triangle_count++;
-}
-
-/* A flat four-cornered face. `facing` says roughly which way is "out", so
- * the face's true direction (from the cross product) can be flipped to
- * agree with it. */
-static void add_face(struct mesh *mesh, struct vec3 a, struct vec3 b,
-		struct vec3 c, struct vec3 d, struct vec3 facing, struct paint paint) {
-	struct vec3 normal = normalise(cross(sub(b, a), sub(d, a)));
-	if (dot(normal, facing) < 0) {
-		normal = vec(-normal.x, -normal.y, -normal.z);
-	}
-	int ia = add_vertex(mesh, a, normal, paint);
-	int ib = add_vertex(mesh, b, normal, paint);
-	int ic = add_vertex(mesh, c, normal, paint);
-	int id = add_vertex(mesh, d, normal, paint);
-	add_triangle(mesh, ia, ib, ic);
-	add_triangle(mesh, ia, ic, id);
-}
-
-/* ---- part: loft ---- */
-
-/* One cross-section of a loft. */
-struct station {
-	float z;                    /* position along the body */
-	float half_width, half_height;
-	float centre_y;             /* how far the section is raised */
-	struct paint paint;
-};
-
-/* How many points go round each cross-section. More is rounder but costs
- * more triangles; small parts like missiles get by with fewer. */
-#define MAX_LOFT_SIDES 18
-static int loft_sides = MAX_LOFT_SIDES;
-
-/*
- * Join a row of cross-sections into a smooth body. Each section is an
- * oval; `squareness` 2 is a true ellipse, larger numbers push it towards
- * a rounded box (a "superellipse"), which suits a fuselage with flat sides.
- * `centre_x` shifts the whole body sideways (for the second engine, etc).
- * The ends are closed with flat caps painted `front_cap` and `back_cap`.
- */
-static void add_loft(struct mesh *mesh, const struct station *stations,
-		int count, float squareness, float centre_x,
-		struct paint front_cap, struct paint back_cap) {
-	int first = mesh->vertex_count;
-	float power = 2.0f / squareness;
-
-	for (int s = 0; s < count; s++) {
-		const struct station *st = &stations[s];
-		/* How fast the body is widening here, to tilt the surface
-		 * direction forwards on a nose cone and backwards on a boat-tail. */
-		const struct station *before = &stations[s > 0 ? s - 1 : s];
-		const struct station *after = &stations[s < count - 1 ? s + 1 : s];
-		float dz = after->z - before->z;
-		float growth = dz != 0 ? ((after->half_width + after->half_height) -
-			(before->half_width + before->half_height)) / (2 * dz) : 0;
-
-		for (int i = 0; i < loft_sides; i++) {
-			float angle = (float)i / loft_sides * 2 * (float)M_PI;
-			float c = cosf(angle), sn = sinf(angle);
-			/* sign * |value|^power squashes the circle outwards. */
-			float ux = (c < 0 ? -1 : 1) * powf(fabsf(c), power);
-			float uy = (sn < 0 ? -1 : 1) * powf(fabsf(sn), power);
-			struct vec3 position = vec(centre_x + ux * st->half_width,
-				st->centre_y + uy * st->half_height, st->z);
-			/* The surface direction of an oval is not towards its
-			 * centre: dividing by the half-sizes corrects for the squash. */
-			struct vec3 normal = vec(
-				ux / (st->half_width > 0.01f ? st->half_width : 0.01f),
-				uy / (st->half_height > 0.01f ? st->half_height : 0.01f), 0);
-			normal = normalise(normal);
-			normal.z = -growth;
-			add_vertex(mesh, position, normal, st->paint);
-		}
-	}
-	/* Join each section to the next with a band of triangles. */
-	for (int s = 0; s < count - 1; s++) {
-		for (int i = 0; i < loft_sides; i++) {
-			int a = first + s * loft_sides + i;
-			int b = first + s * loft_sides + (i + 1) % loft_sides;
-			int c = a + loft_sides, d = b + loft_sides;
-			add_triangle(mesh, a, b, d);
-			add_triangle(mesh, a, d, c);
-		}
-	}
-	/* Caps: a fan of triangles from the centre of each end. */
-	for (int end = 0; end < 2; end++) {
-		const struct station *st = &stations[end == 0 ? 0 : count - 1];
-		/* Which way an end faces depends on which way the list runs. */
-		float direction = (stations[0].z > stations[count - 1].z) ? 1 : -1;
-		struct vec3 normal = vec(0, 0, end == 0 ? direction : -direction);
-		struct paint paint = end == 0 ? front_cap : back_cap;
-		int centre = add_vertex(mesh, vec(centre_x, st->centre_y, st->z),
-			normal, paint);
-		int ring = first + (end == 0 ? 0 : (count - 1) * loft_sides);
-		int rim[MAX_LOFT_SIDES];
-		for (int i = 0; i < loft_sides; i++) {
-			/* Separate rim vertices so the cap gets its own flat shading. */
-			rim[i] = add_vertex(mesh, mesh->vertices[ring + i].position,
-				normal, paint);
-		}
-		for (int i = 0; i < loft_sides; i++) {
-			add_triangle(mesh, centre, rim[i], rim[(i + 1) % loft_sides]);
-		}
-	}
-}
-
-/* A straight tube from z_front to z_back: missiles, fuel tanks, pods. */
-static void add_tube(struct mesh *mesh, float x, float y, float z_front,
-		float z_back, float radius, struct paint paint) {
-	float length = z_front - z_back;
-	struct station stations[] = {
-		{ z_front, radius * 0.08f, radius * 0.08f, y, paint },
-		{ z_front - length * 0.14f, radius * 0.80f, radius * 0.80f, y, paint },
-		{ z_front - length * 0.30f, radius, radius, y, paint },
-		{ z_back + length * 0.15f, radius, radius, y, paint },
-		{ z_back, radius * 0.55f, radius * 0.55f, y, paint },
-	};
-	loft_sides = 8;
-	add_loft(mesh, stations, 5, 2, x, paint, paint);
-	add_loft(mesh, stations, 5, 2, -x, paint, paint);
-	loft_sides = MAX_LOFT_SIDES;
-}
-
-/* A jet pipe: the outer shell, a dark inside, and the glowing exhaust
- * part-way down it. Records the exit so the scene can add a soft glow. */
-static void add_engine(struct mesh *mesh, int index, float x, float y,
-		float z_front, float z_exit, float radius) {
-	struct station shell[] = {
-		{ z_front, radius * 1.06f, radius * 1.06f, y, hot_metal },
-		{ (z_front + z_exit) / 2, radius * 1.02f, radius * 1.02f, y, hot_metal },
-		{ z_exit, radius * 0.90f, radius * 0.90f, y, hot_metal },
-	};
-	loft_sides = 14;
-	add_loft(mesh, shell, 3, 2, x, hot_metal, soot);
-	/* The flame sits a little way inside, so the rim of the pipe hides
-	 * its edge when seen from the side. */
-	struct station fire[] = {
-		{ z_exit + 0.30f, radius * 0.74f, radius * 0.74f, y, flame },
-		{ z_exit + 0.05f, radius * 0.74f, radius * 0.74f, y, flame },
-	};
-	add_loft(mesh, fire, 2, 2, x, flame, flame);
-	loft_sides = MAX_LOFT_SIDES;
-	mesh->nozzles[index] = vec(x, y, z_exit);
-	mesh->nozzle_radius = radius;
-}
-
-/* ---- part: plate ---- */
-
-/*
- * A wing-like panel between a root edge and a tip edge. Each edge runs
- * from a leading point to a trailing point. The panel is thickest part-way
- * back and tapers to nothing at the front and rear, so it has four sloping
- * faces: that slope is what catches the light like a real wing.
- * `up` is the direction of its thickness: (0,1,0) for a wing, (1,0,0) for
- * a fin. With `mirror`, a copy is made on the other side of the aircraft.
- */
-static void add_plate(struct mesh *mesh, struct vec3 root_lead,
-		struct vec3 root_trail, struct vec3 tip_lead, struct vec3 tip_trail,
-		float root_thick, float tip_thick, struct vec3 up, struct paint paint,
-		int mirror) {
-	for (int side = 0; side < (mirror ? 2 : 1); side++) {
-		struct vec3 rl = root_lead, rt = root_trail;
-		struct vec3 tl = tip_lead, tt = tip_trail;
-		struct vec3 u = up;
-		if (side == 1) {
-			rl.x = -rl.x; rt.x = -rt.x; tl.x = -tl.x; tt.x = -tt.x;
-			u.x = -u.x;
-		}
-		struct vec3 down = vec(-u.x, -u.y, -u.z);
-		struct vec3 root_mid = lerp(rl, rt, 0.38f);
-		struct vec3 tip_mid = lerp(tl, tt, 0.38f);
-		struct vec3 root_top = vec(root_mid.x + u.x * root_thick / 2,
-			root_mid.y + u.y * root_thick / 2, root_mid.z + u.z * root_thick / 2);
-		struct vec3 root_bottom = vec(root_mid.x - u.x * root_thick / 2,
-			root_mid.y - u.y * root_thick / 2, root_mid.z - u.z * root_thick / 2);
-		struct vec3 tip_top = vec(tip_mid.x + u.x * tip_thick / 2,
-			tip_mid.y + u.y * tip_thick / 2, tip_mid.z + u.z * tip_thick / 2);
-		struct vec3 tip_bottom = vec(tip_mid.x - u.x * tip_thick / 2,
-			tip_mid.y - u.y * tip_thick / 2, tip_mid.z - u.z * tip_thick / 2);
-
-		add_face(mesh, rl, tl, tip_top, root_top, u, paint);       /* top, front */
-		add_face(mesh, root_top, tip_top, tt, rt, u, paint);       /* top, rear */
-		add_face(mesh, rl, tl, tip_bottom, root_bottom, down, paint);
-		add_face(mesh, root_bottom, tip_bottom, tt, rt, down, paint);
-		/* Close the tip. */
-		struct vec3 outward = sub(tip_mid, root_mid);
-		add_face(mesh, tl, tip_top, tt, tip_bottom, outward, paint);
-	}
-}
-
-/* ---- the three aircraft ---- */
-
-static struct mesh typhoon, tornado, lightning;
-
-/* Eurofighter Typhoon: 16 m long, 11 m span. A delta wing with no
- * tailplane, canards by the cockpit, a chin intake, two engines. */
-static void build_typhoon(struct mesh *m) {
-	struct station body[] = {
-		{ 8.00f, 0.04f, 0.04f, 0.00f, radome },
-		{ 7.40f, 0.24f, 0.25f, 0.00f, radome },
-		{ 6.50f, 0.46f, 0.48f, 0.03f, radome },
-		{ 6.45f, 0.47f, 0.49f, 0.03f, grey },
-		{ 5.00f, 0.62f, 0.70f, 0.10f, grey },
-		{ 3.40f, 0.80f, 0.80f, 0.06f, grey },
-		{ 1.40f, 1.00f, 0.78f, 0.02f, grey },
-		{ -2.00f, 1.12f, 0.74f, 0.00f, grey },
-		{ -5.50f, 1.06f, 0.62f, 0.00f, grey },
-		{ -7.30f, 0.98f, 0.54f, 0.00f, grey_dark },
-	};
-	add_loft(m, body, 10, 3.0f, 0, radome, soot);
-
-	struct station intake[] = {
-		{ 4.30f, 0.78f, 0.30f, -0.82f, grey_dark },
-		{ 2.50f, 0.86f, 0.36f, -0.80f, grey },
-		{ 0.00f, 0.92f, 0.32f, -0.66f, grey },
-		{ -2.50f, 0.80f, 0.20f, -0.52f, grey },
-	};
-	add_loft(m, intake, 4, 5.0f, 0, soot, grey);
-
-	struct station canopy[] = {
-		{ 6.30f, 0.05f, 0.04f, 0.50f, glass },
-		{ 5.70f, 0.32f, 0.26f, 0.60f, glass },
-		{ 4.90f, 0.40f, 0.40f, 0.70f, glass },
-		{ 3.90f, 0.36f, 0.32f, 0.68f, glass },
-		{ 2.90f, 0.14f, 0.08f, 0.66f, grey },
-	};
-	add_loft(m, canopy, 5, 2.0f, 0, glass, grey);
-
-	/* Delta wing, slightly drooped (anhedral). */
-	add_plate(m, vec(1.00f, -0.22f, 2.40f), vec(1.00f, -0.22f, -6.30f),
-		vec(5.45f, -0.34f, -4.70f), vec(5.45f, -0.34f, -6.10f),
-		0.30f, 0.07f, vec(0, 1, 0), grey, 1);
-	/* Canards, angled down. */
-	add_plate(m, vec(0.62f, 0.34f, 5.30f), vec(0.62f, 0.34f, 4.30f),
-		vec(2.00f, 0.02f, 4.40f), vec(2.00f, 0.02f, 3.90f),
-		0.09f, 0.04f, vec(0, 1, 0), grey, 1);
-	/* Fin. */
-	add_plate(m, vec(0, 0.62f, -2.00f), vec(0, 0.62f, -7.20f),
-		vec(0, 4.10f, -6.50f), vec(0, 4.10f, -7.60f),
-		0.24f, 0.08f, vec(1, 0, 0), grey, 0);
-
-	add_engine(m, 0, -0.50f, 0.00f, -7.10f, -8.30f, 0.44f);
-	add_engine(m, 1, 0.50f, 0.00f, -7.10f, -8.30f, 0.44f);
-
-	add_tube(m, 5.52f, -0.34f, -3.90f, -6.70f, 0.13f, grey_dark); /* wingtip pods */
-	add_tube(m, 2.40f, -0.62f, -1.00f, -4.20f, 0.10f, white);     /* missiles */
-	add_tube(m, 3.70f, -0.66f, -2.60f, -5.60f, 0.10f, white);
-}
-
-/* Panavia Tornado: 16.7 m long. Boxy fuselage with big side intakes,
- * wings mounted on top (swung forward), a very tall fin, large tailplanes. */
-static void build_tornado(struct mesh *m) {
-	struct station body[] = {
-		{ 8.30f, 0.04f, 0.04f, -0.05f, radome },
-		{ 7.40f, 0.30f, 0.32f, -0.02f, radome },
-		{ 6.30f, 0.52f, 0.56f, 0.02f, radome },
-		{ 6.25f, 0.53f, 0.57f, 0.02f, grey },
-		{ 4.80f, 0.70f, 0.78f, 0.08f, grey },
-		{ 2.60f, 0.86f, 0.90f, 0.06f, grey },
-		{ 1.60f, 1.36f, 0.88f, 0.00f, grey },   /* the intakes begin */
-		{ -3.00f, 1.36f, 0.90f, 0.00f, grey },
-		{ -6.40f, 1.20f, 0.82f, 0.00f, grey },
-		{ -7.60f, 1.08f, 0.72f, 0.00f, grey_dark },
-	};
-	add_loft(m, body, 10, 4.5f, 0, radome, soot);
-
-	/* Two seats, so a long canopy. */
-	struct station canopy[] = {
-		{ 6.20f, 0.05f, 0.04f, 0.56f, glass },
-		{ 5.50f, 0.34f, 0.28f, 0.70f, glass },
-		{ 4.20f, 0.42f, 0.42f, 0.84f, glass },
-		{ 2.90f, 0.40f, 0.36f, 0.84f, glass },
-		{ 1.90f, 0.20f, 0.12f, 0.82f, grey },
-	};
-	add_loft(m, canopy, 5, 2.0f, 0, glass, grey);
-
-	/* Wings, on the shoulders of the fuselage. */
-	add_plate(m, vec(1.25f, 0.62f, 1.30f), vec(1.25f, 0.62f, -1.50f),
-		vec(6.90f, 0.50f, -2.10f), vec(6.90f, 0.50f, -3.30f),
-		0.30f, 0.09f, vec(0, 1, 0), grey, 1);
-	/* All-moving tailplanes, drooped. */
-	add_plate(m, vec(1.15f, 0.05f, -4.30f), vec(1.15f, 0.05f, -7.60f),
-		vec(3.45f, -0.22f, -7.50f), vec(3.45f, -0.22f, -8.60f),
-		0.16f, 0.06f, vec(0, 1, 0), grey, 1);
-	/* The tall fin. */
-	add_plate(m, vec(0, 0.80f, -2.40f), vec(0, 0.80f, -7.80f),
-		vec(0, 5.10f, -7.10f), vec(0, 5.10f, -8.60f),
-		0.30f, 0.10f, vec(1, 0, 0), grey, 0);
-
-	add_engine(m, 0, -0.52f, 0.00f, -7.40f, -8.60f, 0.50f);
-	add_engine(m, 1, 0.52f, 0.00f, -7.40f, -8.60f, 0.50f);
-
-	add_tube(m, 3.10f, 0.02f, 1.60f, -3.80f, 0.38f, grey);   /* drop tanks */
-	add_tube(m, 5.20f, 0.20f, -0.80f, -3.60f, 0.12f, white); /* outboard stores */
-}
-
-/* English Electric Lightning: 16.8 m long. A tall, slab-sided fuselage
- * with the nose as the air intake, two engines one above the other,
- * sharply swept wings and a low tailplane. Bare polished metal. */
-static void build_lightning(struct mesh *m) {
-	struct station body[] = {
-		{ 8.20f, 0.66f, 0.72f, 0.05f, bare_metal },
-		{ 6.40f, 0.76f, 0.98f, 0.02f, bare_metal },
-		{ 2.50f, 0.84f, 1.30f, 0.00f, bare_metal },
-		{ -4.00f, 0.86f, 1.36f, 0.00f, bare_metal },
-		{ -7.20f, 0.80f, 1.28f, 0.00f, bare_metal },
-		{ -7.90f, 0.76f, 1.22f, 0.00f, hot_metal },
-	};
-	add_loft(m, body, 6, 3.0f, 0, soot, soot);
-
-	/* The pointed centre-body sticking out of the nose intake. */
-	struct station cone[] = {
-		{ 9.00f, 0.03f, 0.03f, 0.05f, radome },
-		{ 8.15f, 0.34f, 0.34f, 0.05f, radome },
-	};
-	add_loft(m, cone, 2, 2.0f, 0, radome, radome);
-
-	struct station canopy[] = {
-		{ 6.50f, 0.05f, 0.04f, 0.92f, glass },
-		{ 5.90f, 0.30f, 0.26f, 1.06f, glass },
-		{ 5.10f, 0.34f, 0.34f, 1.18f, glass },
-		{ 4.20f, 0.28f, 0.22f, 1.20f, bare_metal },
-		{ 1.00f, 0.22f, 0.12f, 1.28f, bare_metal }, /* the spine behind it */
-	};
-	add_loft(m, canopy, 5, 2.0f, 0, glass, bare_metal);
-
-	/* The fuel tank bulge under the belly. */
-	struct station belly[] = {
-		{ 3.00f, 0.10f, 0.06f, -1.25f, bare_metal },
-		{ 1.50f, 0.46f, 0.34f, -1.40f, bare_metal },
-		{ -2.00f, 0.50f, 0.38f, -1.42f, bare_metal },
-		{ -4.00f, 0.12f, 0.08f, -1.30f, bare_metal },
-	};
-	add_loft(m, belly, 4, 2.0f, 0, bare_metal, bare_metal);
-
-	/* Wings swept back 60 degrees. */
-	add_plate(m, vec(0.84f, 0.00f, 2.80f), vec(0.84f, 0.00f, -2.30f),
-		vec(5.30f, -0.10f, -4.60f), vec(5.30f, -0.10f, -5.60f),
-		0.26f, 0.08f, vec(0, 1, 0), bare_metal, 1);
-	/* Tailplanes, set low. */
-	add_plate(m, vec(0.80f, -0.90f, -4.90f), vec(0.80f, -0.90f, -7.40f),
-		vec(2.95f, -0.96f, -8.00f), vec(2.95f, -0.96f, -8.80f),
-		0.14f, 0.05f, vec(0, 1, 0), bare_metal, 1);
-	/* Fin. */
-	add_plate(m, vec(0, 1.30f, -3.00f), vec(0, 1.30f, -7.80f),
-		vec(0, 4.50f, -7.40f), vec(0, 4.50f, -8.60f),
-		0.26f, 0.09f, vec(1, 0, 0), bare_metal, 0);
-
-	add_engine(m, 0, 0, 0.60f, -7.60f, -8.70f, 0.52f);
-	add_engine(m, 1, 0, -0.62f, -7.60f, -8.70f, 0.52f);
-}
+static struct mesh typhoon, f35;
 
 /* Make the whole-number copy of a finished mesh. */
 static void finish_mesh(struct mesh *mesh) {
@@ -520,16 +110,97 @@ static void finish_mesh(struct mesh *mesh) {
 	}
 }
 
+/* ---- loaded aircraft ---- */
+
+/* Where the .mesh files are in the image. They are copied there from
+ * buildroot/overlay/usr/share/perkinsos/models/. The build on an ordinary
+ * distro (distro/Makefile) installs them somewhere else and says where. */
+#ifndef MODEL_DIR
+#define MODEL_DIR "/usr/share/perkinsos/models"
+#endif
+
+/*
+ * Read a mesh file made by tools/glb2mesh.py into `mesh`. The file is
+ * little-endian, the same byte order as the x86 CPU, so each number can
+ * be read straight into a variable of the same type:
+ *
+ *   "PKMESH1\0"                          8 bytes, to check it's our format
+ *   vertex count, triangle count         2 x uint32
+ *   the two exhaust exits, their radius  7 x float, in metres
+ *   each vertex: position, normal        6 x float
+ *                r, g, b, kind           4 x uint8
+ *   each triangle: three vertex numbers  3 x uint32
+ *
+ * Returns false and leaves the mesh empty if the file is missing or
+ * damaged. Every vertex number is checked, because the drawing code uses
+ * them as array indexes without looking.
+ */
+static bool load_mesh(struct mesh *mesh, const char *path) {
+	FILE *file = fopen(path, "rb");
+	if (!file) {
+		fprintf(stderr, "wallpaper: can't open %s\n", path);
+		return false;
+	}
+	char magic[8];
+	uint32_t counts[2]; /* vertices, triangles */
+	float exhaust[7];
+	bool ok = fread(magic, sizeof(magic), 1, file) == 1 &&
+		memcmp(magic, "PKMESH1", sizeof(magic)) == 0 &&
+		fread(counts, sizeof(counts), 1, file) == 1 &&
+		fread(exhaust, sizeof(exhaust), 1, file) == 1 &&
+		counts[0] > 0 && counts[0] <= 1000000 && counts[1] <= 1000000;
+
+	if (ok) {
+		mesh->vertex_count = (int)counts[0];
+		mesh->triangle_count = (int)counts[1];
+		mesh->vertices = malloc(counts[0] * sizeof(struct vertex));
+		mesh->triangles = malloc(counts[1] * 3 * sizeof(int));
+		ok = mesh->vertices && mesh->triangles;
+	}
+	for (uint32_t i = 0; ok && i < counts[0]; i++) {
+		float f[6];
+		uint8_t c[4];
+		ok = fread(f, sizeof(f), 1, file) == 1 && fread(c, sizeof(c), 1, file) == 1;
+		struct vertex *v = &mesh->vertices[i];
+		v->position = vec(f[0], f[1], f[2]);
+		v->normal = normalise(vec(f[3], f[4], f[5]));
+		v->r = c[0];
+		v->g = c[1];
+		v->b = c[2];
+		v->kind = c[3] <= KIND_GLOW ? c[3] : KIND_PAINT;
+	}
+	for (uint32_t i = 0; ok && i < counts[1] * 3; i++) {
+		uint32_t index;
+		ok = fread(&index, sizeof(index), 1, file) == 1 && index < counts[0];
+		mesh->triangles[i] = (int)index;
+	}
+	fclose(file);
+
+	if (!ok) {
+		fprintf(stderr, "wallpaper: %s is not a valid mesh file\n", path);
+		free(mesh->vertices);
+		free(mesh->triangles);
+		memset(mesh, 0, sizeof(*mesh));
+		return false;
+	}
+	mesh->nozzles[0] = vec(exhaust[0], exhaust[1], exhaust[2]);
+	mesh->nozzles[1] = vec(exhaust[3], exhaust[4], exhaust[5]);
+	mesh->nozzle_radius = exhaust[6];
+	return true;
+}
+
 void models_init(void) {
-	if (typhoon.vertex_count != 0) {
+	static bool done;
+	if (done) {
 		return;
 	}
-	build_typhoon(&typhoon);
-	build_tornado(&tornado);
-	build_lightning(&lightning);
-	finish_mesh(&typhoon);
-	finish_mesh(&tornado);
-	finish_mesh(&lightning);
+	done = true;
+	if (load_mesh(&typhoon, MODEL_DIR "/typhoon.mesh")) {
+		finish_mesh(&typhoon);
+	}
+	if (load_mesh(&f35, MODEL_DIR "/f35.mesh")) {
+		finish_mesh(&f35);
+	}
 }
 
 /* ---- drawing ---- */
@@ -718,8 +389,10 @@ static const int32_t glint_axis[3] = { -3957, 6971, -14293 };
 
 void model_draw(int which, const struct model_pose *pose, uint32_t *frame,
 		int stride_pixels, int frame_width, int frame_height) {
-	const struct mesh *mesh = which == MODEL_TYPHOON ? &typhoon :
-		which == MODEL_TORNADO ? &tornado : &lightning;
+	const struct mesh *mesh = which == MODEL_TYPHOON ? &typhoon : &f35;
+	if (mesh->vertex_count == 0) {
+		return; /* its file was missing: models_init() said so */
+	}
 
 	/* Step 1 set-up: one 3x3 rotation matrix from the three angles (roll
 	 * about the nose-to-tail axis, then pitch, then yaw), converted to

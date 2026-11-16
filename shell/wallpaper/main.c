@@ -1,5 +1,5 @@
 /*
- * perkinsos-wallpaper: the animated desktop background. Three jets in
+ * perkinsos-wallpaper: the animated desktop background. Two jets in
  * formation over drifting cloud, a heading tape, and a radar and RWR that
  * show the machine's running programs. What is drawn lives in scene.c;
  * this file is the conversation with the compositor.

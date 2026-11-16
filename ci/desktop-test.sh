@@ -110,15 +110,16 @@ sys.path.insert(0, "ci")
 from gif import read_png
 def bright(path):
     w, h, rgb = read_png(path)
-    return sum(1 for y in range(602, 700) for x in range(276, 500)
+    return sum(1 for y in range(560, 600) for x in range(276, 500)
                if rgb[(y * w + x) * 3 + 1] > 200)
 sys.exit(0 if bright(sys.argv[1]) < 10 and bright(sys.argv[2]) > 60 else 1)
 PY
 	echo "ok: clicking a radar contact at $CONTACT locked it"
 
 	# Cockpit keys: the buttons on the instrument panel start apps too.
-	# SYSTEM INFO is the third key (see key_position() in scene.c).
-	mouse_click 678 553
+	# SYSTEM INFO is the third button along the top of the centre display
+	# (see key_position() in scene.c); click between the button and its name.
+	mouse_click 512 535
 	count cockpitkey perkinsos-sysinfo
 	grep -aq '^cockpitkey=1' "$LOG" || fail "clicking the cockpit's SYSTEM INFO key did not start the app"
 	echo "ok: clicking SYSTEM INFO on the cockpit panel started the app"

@@ -47,9 +47,9 @@ mouse_click $CONTACT
 mouse_move 512 120
 frame                   # 3: TGT LOCKED with the program's details
 
-mouse_move 678 553      # hover the cockpit's SYSTEM INFO key: it lights up
+mouse_move 512 535      # hover the cockpit's SYSTEM INFO key: it lights up
 frame 1                 # 4
-mouse_click 678 553
+mouse_click 512 535
 frame 2.5               # 5: System Info window, started from the cockpit
 
 press alt-p
