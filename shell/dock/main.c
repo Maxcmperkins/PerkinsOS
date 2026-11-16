@@ -31,8 +31,10 @@
 #define BUTTON_HEIGHT 34
 #define BUTTON_GAP 8
 
-/* Button 0 is the launcher; buttons 1.. are apps[0]... */
-#define BUTTON_COUNT (APP_COUNT + 1)
+/* Button 0 is the launcher; buttons 1.. are the pinned apps (see
+ * common/apps.h), loaded once in main(). */
+static struct app_list pinned;
+#define BUTTON_COUNT (pinned.count + 1)
 
 struct dock {
 	/* Globals: objects the compositor offers to every client. */
@@ -54,11 +56,11 @@ struct dock {
 };
 
 static const char *button_label(int index) {
-	return index == 0 ? "APPS" : apps[index - 1].name;
+	return index == 0 ? "APPS" : pinned.items[index - 1].name;
 }
 
 static const char *button_command(int index) {
-	return index == 0 ? LAUNCHER_COMMAND : apps[index - 1].command;
+	return index == 0 ? LAUNCHER_COMMAND : pinned.items[index - 1].command;
 }
 
 /* Left edge of button `index`, in surface coordinates. */
@@ -134,7 +136,9 @@ static void draw(struct dock *dock) {
 			cairo_stroke(cr);
 			cairo_set_source_rgb(cr, HUD_GREEN);
 		}
-		const char *label = button_label(i);
+		/* Cut a long name short so it stays inside its button. */
+		char label[14];
+		snprintf(label, sizeof(label), "%.13s", button_label(i));
 		draw_text(cr, label,
 			button_x(i) + (BUTTON_WIDTH - text_width(cr, label)) / 2,
 			DOCK_HEIGHT / 2.0);
@@ -286,6 +290,7 @@ static const struct wl_registry_listener registry_listener = {
 
 int main(void) {
 	struct dock dock = { .hover = -1, .running = true };
+	apps_load_pinned(&pinned);
 
 	/* NULL: connect to the compositor named by $WAYLAND_DISPLAY. */
 	dock.display = wl_display_connect(NULL);

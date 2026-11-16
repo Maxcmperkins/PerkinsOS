@@ -51,10 +51,15 @@
 #define OSB_PER_ROW 5
 #define OSB_WIDTH 30
 #define OSB_HEIGHT 12
-/* Key 0 opens the launcher; keys 1.. are apps[0]..., as on the dock. */
-#define KEY_COUNT (APP_COUNT + 1)
-_Static_assert(KEY_COUNT <= 2 * OSB_PER_ROW,
-	"more apps than buttons round the centre display");
+/* Key 0 opens the launcher; keys 1.. are the pinned apps, as on the dock
+ * (see common/apps.h). Loaded once in scene_init(). If more are pinned
+ * than there are buttons, the extra ones are left off. */
+static struct app_list pinned;
+
+static int key_count(void) {
+	int count = pinned.count + 1;
+	return count < 2 * OSB_PER_ROW ? count : 2 * OSB_PER_ROW;
+}
 
 /* ---- colours for the physical cockpit and the aircraft ---- */
 
@@ -175,11 +180,11 @@ static void key_position(const struct layout *l, int slot,
 }
 
 static const char *key_label(int index) {
-	return index == 0 ? "APPS" : apps[index - 1].name;
+	return index == 0 ? "APPS" : pinned.items[index - 1].name;
 }
 
 static const char *key_command(int index) {
-	return index == 0 ? LAUNCHER_COMMAND : apps[index - 1].command;
+	return index == 0 ? LAUNCHER_COMMAND : pinned.items[index - 1].command;
 }
 
 /* ---- the flight: a slow, gentle weave ---- */
@@ -611,7 +616,7 @@ static void draw_key(cairo_t *cr, const struct layout *l, int slot, bool lit) {
 		cairo_fill(cr);
 	}
 
-	if (slot >= KEY_COUNT) {
+	if (slot >= key_count()) {
 		return;
 	}
 	/* The name. Lit, it is shown inverted in a box, which is how a real
@@ -627,14 +632,17 @@ static void draw_key(cairo_t *cr, const struct layout *l, int slot, bool lit) {
 	} else {
 		cairo_set_source_rgb(cr, HUD_GREEN);
 	}
-	text_centred(cr, key_label(slot), lx, ly);
+	/* Cut a long name short so it stays in its own slot on the glass. */
+	char legend[13];
+	snprintf(legend, sizeof(legend), "%.12s", key_label(slot));
+	text_centred(cr, legend, lx, ly);
 }
 
 /* Which key is at x,y? -1 for none. A key can be clicked on its button,
  * on its name, or anywhere between the two. */
 static int key_at(const struct layout *l, double x, double y) {
 	double half = legend_width(l) / 2;
-	for (int i = 0; i < KEY_COUNT; i++) {
+	for (int i = 0; i < key_count(); i++) {
 		double bx, by, lx, ly;
 		key_position(l, i, &bx, &by, &lx, &ly);
 		double top = fmin(by, ly - LEGEND_HEIGHT / 2.0);
@@ -1191,6 +1199,9 @@ void scene_init(struct scene *scene, int width, int height) {
 	scene->hover_key = -1;
 	sky_init();
 	models_init();
+	if (pinned.count == 0) {
+		apps_load_pinned(&pinned);
+	}
 
 	/* ARGB32: has an alpha channel, so the window part stays see-through. */
 	scene->cockpit = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,

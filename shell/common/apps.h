@@ -1,20 +1,34 @@
 /*
- * The list of applications. The dock shows them as buttons and the launcher
- * searches them. Add an app here and it appears in both.
+ * The applications the desktop can start. There are two lists:
+ *
+ *   pinned   the few apps that get a button on the dock and in the
+ *            cockpit: the built-in ones, then any you name in the file
+ *            ~/.config/perkinsos/pinned (or /etc/perkinsos/pinned)
+ *   all      the pinned ones, then every app installed on the system.
+ *            The launcher searches this list.
+ *
+ * "Installed" means the app has a .desktop file: a small text file that
+ * every Linux desktop app ships to describe itself (its name, and the
+ * command that starts it). The Buildroot image has none, so there both
+ * lists are just the built-in apps. See apps.c.
  */
 #ifndef PERKINSOS_APPS_H
 #define PERKINSOS_APPS_H
 
 struct app {
-	const char *name;    /* shown to the user; capitals, HUD style */
-	const char *command; /* run with /bin/sh -c */
+	char name[41];      /* shown to the user; capitals, HUD style */
+	char command[512];  /* run with /bin/sh -c */
 };
 
-static const struct app apps[] = {
-	{ "TERMINAL", "foot" },
-	{ "SYSTEM INFO", "perkinsos-sysinfo" },
+struct app_list {
+	struct app *items;
+	int count;
 };
-#define APP_COUNT ((int)(sizeof(apps) / sizeof(apps[0])))
+
+/* Fill `list` (which must start out zeroed). Free it with apps_free(). */
+void apps_load_pinned(struct app_list *list);
+void apps_load_all(struct app_list *list);
+void apps_free(struct app_list *list);
 
 /* Opens the launcher, unless one is already open. */
 #define LAUNCHER_COMMAND \

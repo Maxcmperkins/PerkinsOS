@@ -1,6 +1,6 @@
 /*
  * perkinsos-launcher: a search box in the middle of the screen.
- * Type to filter the app list, Up/Down to choose, Enter to start the app,
+ * Type to filter the list of installed apps (common/apps.c), Up/Down to choose, Enter to start the app,
  * Escape to cancel. It runs once and exits; the dock's "Apps" button and
  * the compositor's Alt+P start a new one each time.
  *
@@ -16,6 +16,7 @@
 #define _GNU_SOURCE /* strcasestr */
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -29,8 +30,8 @@
 #define WIDTH 420
 #define PADDING 16
 #define ROW_HEIGHT 40
-/* search box + one row per app + padding above, below and between */
-#define HEIGHT (PADDING * 3 + ROW_HEIGHT * (1 + APP_COUNT))
+/* At most this many results are on show at once; the list scrolls. */
+#define MAX_ROWS 8
 
 struct launcher {
 	struct wl_display *display;
@@ -52,19 +53,23 @@ struct launcher {
 	struct xkb_state *xkb_state;
 
 	char query[32];          /* what the user has typed */
-	int matches[APP_COUNT];  /* indexes into apps[] that match the query */
+	struct app_list apps;    /* every app: pinned, then installed */
+	int *matches;            /* indexes into apps that match the query */
 	int match_count;
 	int selected;            /* index into matches[] */
+	int first;               /* index into matches[] of the top row on show */
+	int rows;                /* result rows that fit: at most MAX_ROWS */
+	int height;              /* search box + rows + padding round them */
 	bool running;
 };
 
 /* Rebuild matches[]: every app whose name contains the query. */
 static void filter(struct launcher *launcher) {
 	launcher->match_count = 0;
-	for (int i = 0; i < APP_COUNT; i++) {
+	for (int i = 0; i < launcher->apps.count; i++) {
 		/* strcasestr: find a substring, ignoring upper/lower case. An
 		 * empty query is found in every name, so everything matches. */
-		if (strcasestr(apps[i].name, launcher->query) != NULL) {
+		if (strcasestr(launcher->apps.items[i].name, launcher->query) != NULL) {
 			launcher->matches[launcher->match_count++] = i;
 		}
 	}
@@ -73,6 +78,13 @@ static void filter(struct launcher *launcher) {
 		launcher->selected = launcher->match_count > 0 ?
 			launcher->match_count - 1 : 0;
 	}
+	/* Scroll just far enough that the selected row is on show. */
+	if (launcher->selected < launcher->first) {
+		launcher->first = launcher->selected;
+	}
+	if (launcher->selected >= launcher->first + launcher->rows) {
+		launcher->first = launcher->selected - launcher->rows + 1;
+	}
 }
 
 static void draw(struct launcher *launcher) {
@@ -80,7 +92,8 @@ static void draw(struct launcher *launcher) {
 		return;
 	}
 	if (launcher->buffer == NULL) {
-		launcher->buffer = buffer_create(launcher->shm, WIDTH, HEIGHT);
+		launcher->buffer = buffer_create(launcher->shm, WIDTH,
+			launcher->height);
 		if (launcher->buffer == NULL) {
 			launcher->running = false;
 			return;
@@ -96,7 +109,7 @@ static void draw(struct launcher *launcher) {
 	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
 	/* Panel with a green outline. */
-	rounded_rect(cr, 1, 1, WIDTH - 2, HEIGHT - 2, 4);
+	rounded_rect(cr, 1, 1, WIDTH - 2, launcher->height - 2, 4);
 	cairo_set_source_rgb(cr, HUD_BLACK);
 	cairo_fill_preserve(cr);
 	cairo_set_source_rgb(cr, HUD_GREEN);
@@ -128,9 +141,19 @@ static void draw(struct launcher *launcher) {
 		cairo_fill(cr);
 	}
 
-	/* Results. */
+	/* When there are more matches than rows, say how many there are. */
+	if (launcher->match_count > launcher->rows) {
+		char count[16];
+		snprintf(count, sizeof(count), "%d", launcher->match_count);
+		cairo_set_source_rgb(cr, HUD_DIM);
+		draw_text(cr, count, x + w - 12 - text_width(cr, count),
+			y + ROW_HEIGHT / 2.0);
+	}
+
+	/* Results: the rows from `first` on, as many as fit. */
 	y += ROW_HEIGHT + PADDING;
-	for (int i = 0; i < launcher->match_count; i++) {
+	for (int i = launcher->first; i < launcher->match_count &&
+			i < launcher->first + launcher->rows; i++) {
 		if (i == launcher->selected) {
 			/* Selected row in inverse video. */
 			rounded_rect(cr, x, y, w, ROW_HEIGHT, 3);
@@ -140,7 +163,7 @@ static void draw(struct launcher *launcher) {
 		} else {
 			cairo_set_source_rgb(cr, HUD_GREEN);
 		}
-		draw_text(cr, apps[launcher->matches[i]].name, x + 12,
+		draw_text(cr, launcher->apps.items[launcher->matches[i]].name, x + 12,
 			y + ROW_HEIGHT / 2.0);
 		y += ROW_HEIGHT;
 	}
@@ -151,7 +174,7 @@ static void draw(struct launcher *launcher) {
 
 	cairo_surface_flush(launcher->buffer->cairo_surface);
 	wl_surface_attach(launcher->surface, launcher->buffer->wl_buffer, 0, 0);
-	wl_surface_damage_buffer(launcher->surface, 0, 0, WIDTH, HEIGHT);
+	wl_surface_damage_buffer(launcher->surface, 0, 0, WIDTH, launcher->height);
 	wl_surface_commit(launcher->surface);
 }
 
@@ -232,7 +255,8 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
 	case XKB_KEY_Return:
 	case XKB_KEY_KP_Enter:
 		if (launcher->match_count > 0) {
-			spawn(apps[launcher->matches[launcher->selected]].command);
+			spawn(launcher->apps.items[
+				launcher->matches[launcher->selected]].command);
 		}
 		launcher->running = false;
 		return;
@@ -336,6 +360,11 @@ static const struct wl_registry_listener registry_listener = {
 int main(void) {
 	struct launcher launcher = { .running = true };
 	launcher.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+	apps_load_all(&launcher.apps);
+	launcher.matches = malloc(launcher.apps.count * sizeof(int));
+	launcher.rows = launcher.apps.count < MAX_ROWS ?
+		launcher.apps.count : MAX_ROWS;
+	launcher.height = PADDING * 3 + ROW_HEIGHT * (1 + launcher.rows);
 	filter(&launcher); /* empty query: every app is listed */
 
 	launcher.display = wl_display_connect(NULL);
@@ -359,7 +388,8 @@ int main(void) {
 	zwlr_layer_surface_v1_add_listener(launcher.layer_surface,
 		&layer_surface_listener, &launcher);
 	/* A fixed size and no anchor: the compositor centres us. */
-	zwlr_layer_surface_v1_set_size(launcher.layer_surface, WIDTH, HEIGHT);
+	zwlr_layer_surface_v1_set_size(launcher.layer_surface, WIDTH,
+		launcher.height);
 	/* Exclusive: all keyboard input comes to us while we are mapped. */
 	zwlr_layer_surface_v1_set_keyboard_interactivity(launcher.layer_surface,
 		ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
