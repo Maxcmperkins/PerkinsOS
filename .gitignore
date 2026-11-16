@@ -11,6 +11,7 @@ dl/
 *.a
 *.so
 compositor/build/
+distro/build/
 shell/build/
 
 # Editors / OS

@@ -1,0 +1,84 @@
+# Build and install PerkinsOS's own programs on an ordinary Linux distro
+# (docs/PLAN-DAILY-DRIVER.md, stage 1). The Buildroot image does not use
+# this file: its build rules are in buildroot/package/. Both build the same
+# compositor/ and shell/ source.
+#
+#   make -C distro                 build into distro/build/
+#   sudo make -C distro install    install into /usr/local
+#   make -C distro clean
+#
+# Packages needed, by their Ubuntu 26.04 names:
+#   build-essential pkg-config libwlroots-0.19-dev libwayland-dev
+#   wayland-protocols libxkbcommon-dev libcairo2-dev
+# and to run it: foot (the terminal) and fonts-dejavu-core.
+
+PREFIX ?= /usr/local
+PKG_CONFIG ?= pkg-config
+TOP := $(abspath $(CURDIR)/..)
+BUILD := $(CURDIR)/build
+
+# pkg-config tells us where the distro put each tool and protocol file.
+WAYLAND_SCANNER := $(shell $(PKG_CONFIG) --variable=wayland_scanner wayland-scanner)
+WAYLAND_PROTOCOLS := $(shell $(PKG_CONFIG) --variable=pkgdatadir wayland-protocols)
+# layer-shell is not in wayland-protocols. Buildroot takes its XML from the
+# wlroots source. Distros' wlroots packages leave it out (and Ubuntu has no
+# wlr-protocols package), so distro/protocol/ holds a copy of that one file
+# from wlroots 0.19.2, the version Buildroot pins.
+WLR_PROTOCOLS ?= $(CURDIR)/protocol
+
+# Same rule as buildroot/package/perkinsos-shell: every folder shell/NAME/
+# with a main.c becomes the program perkinsos-NAME, compiled together with
+# everything in shell/common/.
+SHELL_PROGRAMS := $(notdir $(patsubst %/main.c,%,$(wildcard $(TOP)/shell/*/main.c)))
+SHELL_PKGS := wayland-client xkbcommon cairo
+# MODEL_DIR: where the wallpaper looks for its aircraft (see model.c).
+SHELL_CFLAGS := -O2 -g -Wall -Werror -I$(BUILD)/protocol -I$(TOP)/shell/common \
+	-DMODEL_DIR='"$(PREFIX)/share/perkinsos/models"' \
+	$(shell $(PKG_CONFIG) --cflags $(SHELL_PKGS))
+SHELL_LIBS := $(shell $(PKG_CONFIG) --libs $(SHELL_PKGS)) -lm
+SHELL_PROTOCOLS := $(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml \
+	$(WLR_PROTOCOLS)/wlr-layer-shell-unstable-v1.xml
+
+.PHONY: all compositor shell install clean
+
+all: compositor shell
+
+# The compositor has its own Makefile (it came with TinyWL). It writes its
+# output next to its source, so build a copy and keep compositor/ clean.
+compositor:
+	mkdir -p $(BUILD)/compositor
+	cp $(TOP)/compositor/Makefile $(TOP)/compositor/*.c $(BUILD)/compositor/
+	$(MAKE) -C $(BUILD)/compositor WLR_PROTOCOLS=$(WLR_PROTOCOLS)
+
+# wayland-scanner turns each protocol's XML into a C header and a C file;
+# then each program is one compiler call.
+shell:
+	mkdir -p $(BUILD)/protocol
+	for xml in $(SHELL_PROTOCOLS); do \
+		name=$$(basename $$xml .xml); \
+		$(WAYLAND_SCANNER) client-header $$xml $(BUILD)/protocol/$$name-client-protocol.h || exit 1; \
+		$(WAYLAND_SCANNER) private-code $$xml $(BUILD)/protocol/$$name-protocol.c || exit 1; \
+	done
+	for name in $(SHELL_PROGRAMS); do \
+		echo "  CC      perkinsos-$$name"; \
+		$(CC) $(SHELL_CFLAGS) $(TOP)/shell/$$name/*.c $(TOP)/shell/common/*.c \
+			$(BUILD)/protocol/*.c -o $(BUILD)/perkinsos-$$name $(SHELL_LIBS) || exit 1; \
+	done
+
+# The session script, terminal colours and aircraft are the same files the
+# Buildroot image uses, taken from its overlay. perkinsos-start is new: it
+# does the job the image's init script does.
+OVERLAY := $(TOP)/buildroot/overlay
+install:
+	install -D -m 0755 $(BUILD)/compositor/tinywl $(DESTDIR)$(PREFIX)/bin/perkinsos-compositor
+	for name in $(SHELL_PROGRAMS); do \
+		install -D -m 0755 $(BUILD)/perkinsos-$$name $(DESTDIR)$(PREFIX)/bin/perkinsos-$$name || exit 1; \
+	done
+	install -D -m 0755 $(OVERLAY)/usr/bin/perkinsos-session $(DESTDIR)$(PREFIX)/bin/perkinsos-session
+	install -D -m 0755 perkinsos-start $(DESTDIR)$(PREFIX)/bin/perkinsos-start
+	install -d $(DESTDIR)$(PREFIX)/share/perkinsos/models
+	install -m 0644 $(OVERLAY)/usr/share/perkinsos/models/*.mesh $(DESTDIR)$(PREFIX)/share/perkinsos/models/
+	install -D -m 0644 $(OVERLAY)/etc/xdg/foot/foot.ini $(DESTDIR)/etc/xdg/foot/foot.ini
+
+clean:
+	rm -rf $(BUILD)
