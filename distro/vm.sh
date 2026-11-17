@@ -36,7 +36,8 @@ PACKAGES="build-essential pkg-config libwlroots-0.19-dev libwayland-dev \
 	wayland-protocols libxkbcommon-dev libcairo2-dev \
 	foot fonts-dejavu-core rsync \
 	fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
-	xdg-desktop-portal xdg-desktop-portal-gtk"
+	xdg-desktop-portal xdg-desktop-portal-gtk \
+	xwayland x11-apps"
 
 # Download the cloud image and refuse it if the checksum is wrong.
 fetch() {

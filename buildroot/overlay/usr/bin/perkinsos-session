@@ -9,8 +9,10 @@
 # session is running. Without this a sandboxed app such as Firefox gets no
 # file dialogs (see distro/perkinsos-portals.conf).
 if command -v dbus-update-activation-environment > /dev/null; then
+	# DISPLAY is only set once the compositor runs XWayland; a name that
+	# is not set is skipped.
 	dbus-update-activation-environment --systemd \
-		WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+		WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
 	systemctl --user start perkinsos-session.target
 fi
 

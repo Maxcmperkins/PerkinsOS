@@ -13,6 +13,9 @@
 # and to run it: foot (the terminal) and fonts-dejavu-core. For apps to be
 # usable: fonts-noto-* (other scripts, emoji) and xdg-desktop-portal with
 # xdg-desktop-portal-gtk (file open and save dialogs for sandboxed apps).
+# For apps that only speak X11: xwayland (the X server the compositor
+# starts; Ubuntu's wlroots is built with WLR_HAS_XWAYLAND, Buildroot's is
+# not), and x11-apps (xeyes, xclock: the simplest X11 programs, to test it).
 
 PREFIX ?= /usr/local
 PKG_CONFIG ?= pkg-config
