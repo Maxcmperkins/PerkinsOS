@@ -15,7 +15,7 @@ Both are produced by `make demo` from headless boots: every frame is a screensho
 | Part | Source |
 | --- | --- |
 | Linux kernel, Mesa, libinput, wlroots, foot | Upstream, built from source by Buildroot |
-| Compositor (`compositor/`) | Forked from TinyWL (wlroots 0.19.2); wallpaper, borders, keybindings, layer-shell and maximize added |
+| Compositor (`compositor/`) | Forked from TinyWL (wlroots 0.19.2); wallpaper, borders, keybindings, layer-shell, maximize, Alt+Tab and Alt+drag move/resize added |
 | Wallpaper, dock, launcher, System Info app (`shell/`) | Written for this project: plain C on wayland-client, cairo and xkbcommon |
 | Aircraft models | Downloaded from Sketchfab (see Credits) and converted by [tools/glb2mesh.py](tools/glb2mesh.py) |
 | Boot-to-desktop init (`buildroot/overlay/`) | Written for this project |
@@ -97,7 +97,7 @@ distro/vm.sh ssh PerkinsOS/distro/apps.sh pin   # put the main ones on the dock
 distro/vm.sh stop
 ```
 
-Tested there: Firefox (with file dialogs), VS Code, Discord, Blender, Inkscape, OBS Studio and DB Browser for SQLite open and work. Which apps work and why some needed help: [docs/APPS.md](docs/APPS.md). This path has no automated test yet.
+Tested there: Firefox (with file dialogs), VS Code, Discord, Blender, Inkscape, OBS Studio and DB Browser for SQLite open and work, with Noto fonts for other languages and emoji. Which apps work and why some needed help: [docs/APPS.md](docs/APPS.md). Apps that only speak X11 (Steam, IntelliJ, PyCharm) need XWayland, which is next; the VM already has the XWayland server installed. This path has no automated test yet.
 
 ## Repo layout
 
@@ -125,7 +125,10 @@ docs/         plan, setup, architecture, week-by-week notes, write-up
 Since then: the cockpit, and the start of a longer goal, using PerkinsOS in place of Windows. The milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 - [x] The desktop runs on Ubuntu 26.04 in a VM, and Firefox starts from the launcher
-- [ ] An hour of normal use in the VM: window switching, title bars, file dialogs
+- [ ] An hour of normal use in the VM: title bars, minimise, launcher clicks
+  - [x] Alt+Tab, Alt+drag move and resize, shut down and restart from the launcher
+  - [x] File dialogs, fonts for other languages, everyday apps installed and pinned (`distro/apps.sh`)
+- [ ] XWayland, for apps that only speak X11 (Steam, IntelliJ, PyCharm)
 - [ ] Draw with the graphics card
 - [ ] Lock screen, notifications, sound, login
 - [ ] Boot my laptop from a USB stick
