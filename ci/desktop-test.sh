@@ -148,6 +148,65 @@ sys.exit(0 if all(row(before, y) == row(after, y) for y in range(h - 48, h)) els
 PY
 	echo "ok: a maximized window fills the screen ($CELLS cells) and stops at the dock"
 	press alt-q
+	sleep 1
+
+	# Alt+drag: with Alt held, the right button resizes the window under
+	# the pointer and the left button moves it. With no other window open,
+	# a new one appears at 40,40 (see xdg_toplevel_map() in tinywl.c) and a
+	# terminal is about 700x490 pixels. Drag its bottom-right quarter
+	# outwards. The terminal writes down its size in character cells
+	# before and after, and it must have grown both ways. (The first
+	# reading waits two seconds: a terminal is 24x80 until its window has
+	# been given its real size.)
+	send 'WAYLAND_DISPLAY=wayland-0 foot sh -c "sleep 2; stty size > /tmp/size0; sleep 9; stty size > /tmp/size1; sleep 60" > /dev/null 2>&1 &'
+	sleep 4
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/drag1-test.png > /dev/null
+	mouse_alt_drag 600 420 700 500 right
+	send 'sleep 9; echo dragcells=$(tr " " x < /tmp/size0)to$(tr " " x < /tmp/size1)'
+	wait_for '^dragcells=[0-9]*x[0-9]*to[0-9]'
+	CELLS=$(grep -a '^dragcells=' "$LOG" | tr -d '\r' | cut -d= -f2)
+	BEFORE=${CELLS%to*}; AFTER=${CELLS#*to}
+	[ "${AFTER%x*}" -gt "${BEFORE%x*}" ] && [ "${AFTER#*x}" -gt "${BEFORE#*x}" ] ||
+		fail "Alt+right-drag did not make the terminal bigger ($BEFORE to $AFTER, rows x columns)"
+	echo "ok: Alt+right-drag resized the window ($BEFORE to $AFTER, rows x columns)"
+
+	# Now move it right and down. The point 60,60 was inside the window
+	# (dark terminal background); afterwards the sky shows there.
+	mouse_alt_drag 200 200 400 300 left
+	mouse_move 512 150
+	sleep 1
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/drag2-test.png > /dev/null
+	python3 - output/drag1-test.png output/drag2-test.png <<'PY' || fail "Alt+left-drag did not move the window"
+import sys
+sys.path.insert(0, "ci")
+from gif import read_png
+def brightest(path, x, y):
+    w, h, rgb = read_png(path)
+    return max(rgb[(y * w + x) * 3:(y * w + x) * 3 + 3])
+before, after = brightest(sys.argv[1], 60, 60), brightest(sys.argv[2], 60, 60)
+inside = brightest(sys.argv[2], 300, 200)       # still covered after the move
+sys.exit(0 if before < 60 and after > 120 and inside < 60 else 1)
+PY
+	echo "ok: Alt+left-drag moved the window"
+	press alt-q
+	sleep 1
+
+	# Shut down from the launcher: SHUT DOWN is one of its last entries.
+	press alt-p
+	sleep 1
+	press s; press h; press u; press t
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/shutdown-test.png > /dev/null
+	press ret
+	for _ in $(seq 120); do
+		kill -0 "$QEMU_PID" 2>/dev/null || break
+		sleep 0.5
+	done
+	kill -0 "$QEMU_PID" 2>/dev/null && fail "SHUT DOWN in the launcher did not power the machine off"
+	wait "$QEMU_PID" || fail "QEMU exited with an error"
+	echo "ok: SHUT DOWN in the launcher powered the machine off"
+	rm -rf "$WORK"
+	echo "PASS"
+	exit 0
 fi
 
 stop_vm
