@@ -17,7 +17,9 @@ Both are produced by `make demo` from headless boots: every frame is a screensho
 | Linux kernel, Mesa, libinput, wlroots, foot | Upstream, built from source by Buildroot |
 | Compositor (`compositor/`) | Forked from TinyWL (wlroots 0.19.2); wallpaper, borders, keybindings, layer-shell and maximize added |
 | Wallpaper, dock, launcher, System Info app (`shell/`) | Written for this project: plain C on wayland-client, cairo and xkbcommon |
+| Aircraft models | Downloaded from Sketchfab (see Credits) and converted by [tools/glb2mesh.py](tools/glb2mesh.py) |
 | Boot-to-desktop init (`buildroot/overlay/`) | Written for this project |
+| Build and test VM for Ubuntu (`distro/`) | Written for this project |
 | Build, tests, CI (`Makefile`, `buildroot/`, `ci/`) | Written for this project |
 
 The code written for this project was written with AI assistance (Claude). Every change to the TinyWL fork is marked `PerkinsOS:` in [compositor/tinywl.c](compositor/tinywl.c), and `git diff 068d7ce -- compositor/` shows exactly what was added to stock TinyWL.
@@ -49,16 +51,18 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Click a window to focus it. Drag a title bar to move a window.
 
+On a system with installed apps (see "On Ubuntu" below), the launcher lists every app that has a `.desktop` file, and any app named in `~/.config/perkinsos/pinned` gets a button on the dock and in the cockpit.
+
 The cockpit is live:
 
-- **Keys** on the instrument panel start apps, like the dock's buttons. They light up under the pointer.
+- **Buttons** round the centre display start apps, like the dock's buttons. Each has its name lit on the glass beside it, as on a real cockpit screen, and lights up under the pointer.
 
 - **Radar** (left screen): every contact is a running program. Older programs sit near the centre; one you have just started appears at the edge. Bigger dots use more memory. Hover a contact to see what it is in the data display between the screens; click to lock it and keep its name, PID, memory and CPU there. Click again to break the lock.
 - **RWR** (right screen): every symbol is a program using the CPU right now, labelled with the first two letters of its name. The busier it is, the closer to the centre; the busiest gets a diamond.
 
-- **Dials** (on a wide screen): CPU, memory, load average and number of running programs.
+- **Dials** (on a wide screen): CPU, memory, load average and number of running programs. Beside them, four small standby gauges show the flight: speed, altitude, heading and climb rate.
 
-The flight (heading, speed, altitude) is a simulation; the radar, RWR and dials are real data from `/proc`.
+The flight (heading, speed, altitude, and the standby gauges that show it) is a simulation; the radar, RWR and dials are real data from `/proc`.
 
 ### Frame rate
 
@@ -78,6 +82,19 @@ make compositor     # rebuild only compositor/ (seconds)
 make shell          # rebuild only shell/ (seconds)
 ```
 
+### On Ubuntu, with real apps
+
+The same `compositor/` and `shell/` also build on Ubuntu 26.04, where apps come from the package manager. It is the first step towards using PerkinsOS as an everyday desktop: see the [plan](docs/PLAN-DAILY-DRIVER.md) and the [roadmap](docs/ROADMAP.md).
+
+```sh
+distro/vm.sh create    # once: make a test VM from Ubuntu's cloud image
+distro/vm.sh start     # boot it; a window opens
+distro/vm.sh install   # copy this repo in, build it, install it
+distro/vm.sh stop
+```
+
+Tested there: Firefox starts from the launcher and loads a page. This path has no automated test yet.
+
 ## Repo layout
 
 ```
@@ -86,6 +103,7 @@ distro/       build and test VM for running the desktop on Ubuntu instead
 compositor/   the Wayland compositor
 shell/        dock, launcher, apps, and code they share
 ci/           headless tests; screenshot, mouse and GIF tools
+tools/        glb2mesh.py: turns a downloaded 3D model into the wallpaper's mesh format
 docs/         plan, setup, architecture, week-by-week notes, write-up
 ```
 
@@ -100,12 +118,24 @@ docs/         plan, setup, architecture, week-by-week notes, write-up
 - [x] Week 7: boot to desktop + CI
 - [x] Week 8: polish + write-up
 
+Since then: the cockpit, and the start of a longer goal, using PerkinsOS in place of Windows. The milestones are in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+- [x] The desktop runs on Ubuntu 26.04 in a VM, and Firefox starts from the launcher
+- [ ] An hour of normal use in the VM: window switching, title bars, file dialogs
+- [ ] Draw with the graphics card
+- [ ] Lock screen, notifications, sound, login
+- [ ] Boot my laptop from a USB stick
+- [ ] Install beside Windows
+- [ ] A month without Windows: 1.0
+
 ## Credits
 
 The Typhoon and F-35 meshes in `buildroot/overlay/usr/share/perkinsos/models/` are converted from Sketchfab models with [tools/glb2mesh.py](tools/glb2mesh.py):
 
 - Eurofighter Typhoon (UK) by 42manako, [CC BY-NC 4.0](http://creativecommons.org/licenses/by-nc/4.0/): https://sketchfab.com/3d-models/eurofighter-typhoon-uk-716c3c241f4b42059ec976de5cfb3e34
-- F-35 Lightning II: TODO author, licence and link
+- F-35 Lightning II - Fighter Jet - Free by bohmerang, [CC BY-NC-SA 4.0](http://creativecommons.org/licenses/by-nc-sa/4.0/): https://sketchfab.com/3d-models/f-35-lightning-ii-fighter-jet-free-b1ab1c0090e34b0fbfe667e706023e6d
+
+Both were changed for this project: reduced in detail, landing gear removed, and each vertex given one colour taken from the model's texture. Both licences allow non-commercial use only, and the F-35's also requires anything made from it to carry the same licence. So `typhoon.mesh` is under CC BY-NC 4.0 and `f35.mesh` under CC BY-NC-SA 4.0, not under whatever covers the rest of this repo. The same notice is in [LICENSE.txt](buildroot/overlay/usr/share/perkinsos/models/LICENSE.txt) beside the files.
 
 ## Later (not now)
 

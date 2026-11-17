@@ -88,7 +88,7 @@ Without it the CPU itself is emulated and the desktop reaches about 13 frames a 
 
 Decided on 16 November: glTF models from Sketchfab, converted during development by `tools/glb2mesh.py` (not in the VM and not during the build), kept under 8,000 triangles each, with one colour per vertex taken from the model's texture.
 
-Still open: **the F-35 model's licence is not recorded**, and the Typhoon's is CC BY-NC (non-commercial use only). Until the F-35's licence is known and allows redistribution, its mesh file should not be pushed to the public repo.
+Licences, both recorded in the README and beside the files: the Typhoon is CC BY-NC 4.0 and the F-35 is CC BY-NC-SA 4.0. Both allow sharing an adapted copy with credit, for non-commercial use only. If this project is ever used commercially, both models have to be replaced.
 
 ### 3. Software rendering or the graphics card
 

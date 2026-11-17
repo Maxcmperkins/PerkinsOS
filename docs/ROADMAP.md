@@ -33,6 +33,8 @@ Nothing new; make what exists safe.
 
 **Done when:** `git status` is clean, GitHub shows the cockpit, and CI passes.
 
+**Status, 17 November 2026:** committed and pushed, CI passes, and both aircraft models' licences are recorded in the README. Still to do, both by Max: make KVM permanent, and bring `CLAUDE.md` up to date.
+
 ### M1. An hour in the VM without ssh (M)
 
 Everything a normal sitting needs, in the Ubuntu VM, using only the keyboard and mouse.
