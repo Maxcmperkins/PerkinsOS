@@ -35,6 +35,16 @@ static const struct app builtin[] = {
 };
 #define BUILTIN_COUNT ((int)(sizeof(builtin) / sizeof(builtin[0])))
 
+/* Things the launcher offers that are not apps. They come last in its
+ * list and are never pinned. Each tries systemd's command first (a
+ * normal distro, where a logged-in user is allowed to do this) and falls
+ * back to the plain one (the Buildroot image, where we are root). */
+static const struct app actions[] = {
+	{ "SHUT DOWN", "systemctl poweroff 2> /dev/null || poweroff" },
+	{ "RESTART", "systemctl reboot 2> /dev/null || reboot" },
+};
+#define ACTION_COUNT ((int)(sizeof(actions) / sizeof(actions[0])))
+
 /* ---- small string helpers ---- */
 
 /* Copy as much of `from` as fits, always ending with a 0 byte. */
@@ -323,4 +333,7 @@ void apps_load_pinned(struct app_list *list) {
 void apps_load_all(struct app_list *list) {
 	apps_load_pinned(list);
 	add_installed(list);
+	for (int i = 0; i < ACTION_COUNT; i++) {
+		add_app(list, &actions[i]);
+	}
 }

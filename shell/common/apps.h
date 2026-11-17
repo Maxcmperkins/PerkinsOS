@@ -4,8 +4,8 @@
  *   pinned   the few apps that get a button on the dock and in the
  *            cockpit: the built-in ones, then any you name in the file
  *            ~/.config/perkinsos/pinned (or /etc/perkinsos/pinned)
- *   all      the pinned ones, then every app installed on the system.
- *            The launcher searches this list.
+ *   all      the pinned ones, then every app installed on the system,
+ *            then SHUT DOWN and RESTART. The launcher searches this list.
  *
  * "Installed" means the app has a .desktop file: a small text file that
  * every Linux desktop app ships to describe itself (its name, and the
