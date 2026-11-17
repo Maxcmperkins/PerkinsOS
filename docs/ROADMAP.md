@@ -47,6 +47,8 @@ Everything a normal sitting needs, in the Ubuntu VM, using only the keyboard and
 
 **Done when:** I browse, download a file, open it, and shut down, without touching ssh or the serial console.
 
+**Status (17 Nov 2026), slice 1 done:** Alt+Tab; Alt+left-drag moves and Alt+right-drag resizes a window; SHUT DOWN and RESTART in the launcher; Noto fonts; `xdg-desktop-portal` with the GTK backend, started through `perkinsos-session.target`, and a portal file dialog opens on the desktop in the VM. Next: title bars with a close button, minimise, launcher clicks and key repeat, and moving "quit the compositor" off Alt+Escape.
+
 ### M2. Draw with the graphics card (L)
 
 The biggest technical change. Today wlroots' pixman renderer draws every frame on the CPU.

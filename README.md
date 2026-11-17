@@ -46,10 +46,12 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | Alt+P, or the dock's Apps button | Open the launcher: type to filter, Enter to start, Escape to cancel |
 | Alt+Enter | Open a terminal |
 | Alt+Q | Close the focused window |
-| Alt+F1 | Switch to the next window |
+| Alt+Tab, or Alt+F1 | Switch to the next window |
+| Alt+left-drag | Move the window under the pointer, from anywhere in it |
+| Alt+right-drag | Resize the window under the pointer, from the corner nearest the pointer |
 | Alt+Escape | Quit the compositor |
 
-Click a window to focus it. Drag a title bar to move a window.
+Click a window to focus it. Drag a title bar to move a window. To shut down or restart, open the launcher and type "shut" or "restart".
 
 On a system with installed apps (see "On Ubuntu" below), the launcher lists every app that has a `.desktop` file, and any app named in `~/.config/perkinsos/pinned` gets a button on the dock and in the cockpit.
 
@@ -144,5 +146,4 @@ Ideas parked here so they don't derail the plan. The long-term goal, running rea
 - Key repeat in the launcher, and clicking a result to start it
 - Icons on the dock; System Info as cockpit gauges
 - Server-side title bars, so every window gets the same one
-- Alt+drag to move a window from anywhere
 - Multiple screens: layer surfaces and maximize currently assume the first one
