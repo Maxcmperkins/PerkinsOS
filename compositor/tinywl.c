@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <getopt.h>
+#include <linux/input-event-codes.h> /* PerkinsOS: BTN_LEFT, BTN_RIGHT */
 #include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -96,6 +97,10 @@ struct tinywl_server {
 	double grab_x, grab_y;
 	struct wlr_box grab_geobox;
 	uint32_t resize_edges;
+	/* PerkinsOS: the mouse button that started an Alt+drag, or 0. Its
+	 * press was not passed on to the window, so its release must not be
+	 * either. */
+	uint32_t alt_drag_button;
 
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
@@ -300,6 +305,7 @@ static bool handle_keybinding(struct tinywl_server *server, xkb_keysym_t sym) {
 		wl_display_terminate(server->wl_display);
 		break;
 	case XKB_KEY_F1:
+	case XKB_KEY_Tab: /* PerkinsOS: Alt+Tab, the usual key for this. */
 		/* Cycle to the next toplevel */
 		if (wl_list_length(&server->toplevels) < 2) {
 			break;
@@ -654,12 +660,69 @@ static void server_cursor_motion_absolute(
 	process_cursor_motion(server, event->time_msec);
 }
 
+/* PerkinsOS: defined further down; Alt+drag starts one. */
+static void begin_interactive(struct tinywl_toplevel *toplevel,
+		enum tinywl_cursor_mode mode, uint32_t edges);
+
+/*
+ * PerkinsOS: Alt+drag. With Alt held, the left button moves the window
+ * under the pointer and the right button resizes it, from wherever on
+ * the window you press. Stock TinyWL only moves or resizes when the app
+ * asks to (because you dragged its own title bar or edge), so a window
+ * with no title bar could not be moved at all.
+ * Returns true if this button press started a move or resize.
+ */
+static bool begin_alt_drag(struct tinywl_server *server, uint32_t button) {
+	struct wlr_keyboard *keyboard = wlr_seat_get_keyboard(server->seat);
+	if (keyboard == NULL ||
+			!(wlr_keyboard_get_modifiers(keyboard) & WLR_MODIFIER_ALT) ||
+			(button != BTN_LEFT && button != BTN_RIGHT)) {
+		return false;
+	}
+	double sx, sy;
+	struct wlr_surface *surface = NULL;
+	struct tinywl_toplevel *toplevel = desktop_toplevel_at(server,
+			server->cursor->x, server->cursor->y, &surface, &sx, &sy);
+	if (toplevel == NULL || toplevel->maximized) {
+		return false; /* nothing there, or it fills the screen */
+	}
+	focus_toplevel(toplevel);
+	if (button == BTN_LEFT) {
+		begin_interactive(toplevel, TINYWL_CURSOR_MOVE, 0);
+	} else {
+		/* Resize by the corner nearest the pointer: work out which half
+		 * of the window, across and down, the pointer is in. */
+		struct wlr_box *box = &toplevel->xdg_toplevel->base->geometry;
+		double x = server->cursor->x - toplevel->scene_tree->node.x - box->x;
+		double y = server->cursor->y - toplevel->scene_tree->node.y - box->y;
+		uint32_t edges =
+			(x < box->width / 2.0 ? WLR_EDGE_LEFT : WLR_EDGE_RIGHT) |
+			(y < box->height / 2.0 ? WLR_EDGE_TOP : WLR_EDGE_BOTTOM);
+		begin_interactive(toplevel, TINYWL_CURSOR_RESIZE, edges);
+	}
+	server->alt_drag_button = button;
+	return true;
+}
+
 static void server_cursor_button(struct wl_listener *listener, void *data) {
 	/* This event is forwarded by the cursor when a pointer emits a button
 	 * event. */
 	struct tinywl_server *server =
 		wl_container_of(listener, server, cursor_button);
 	struct wlr_pointer_button_event *event = data;
+	/* PerkinsOS: an Alt+drag is ours from press to release; the window
+	 * under the pointer never hears about either. */
+	if (event->state == WL_POINTER_BUTTON_STATE_PRESSED &&
+			begin_alt_drag(server, event->button)) {
+		return;
+	}
+	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED &&
+			server->alt_drag_button != 0 &&
+			event->button == server->alt_drag_button) {
+		server->alt_drag_button = 0;
+		reset_cursor_mode(server);
+		return;
+	}
 	/* Notify the client with pointer focus that a button press has occurred */
 	wlr_seat_pointer_notify_button(server->seat,
 			event->time_msec, event->button, event->state);
