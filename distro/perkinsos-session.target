@@ -1,0 +1,12 @@
+# A systemd user "target": a named point that other units can wait for.
+#
+# Services that need a desktop to draw on (the portal services, for one)
+# are set up to start only once graphical-session.target is active, and to
+# stop when it stops. Desktops do not start that target directly; each has
+# its own target bound to it, and this is ours. perkinsos-session starts it
+# once the compositor is ready, and it goes away when the session ends.
+[Unit]
+Description=PerkinsOS desktop session
+BindsTo=graphical-session.target
+Wants=graphical-session-pre.target
+After=graphical-session-pre.target

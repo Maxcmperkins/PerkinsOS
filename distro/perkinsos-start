@@ -23,4 +23,6 @@ LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}"
 mkdir -p "$LOG_DIR"
 # -s CMD: a command the compositor runs once it is ready (the wallpaper
 # and the dock).
-exec perkinsos-compositor -s perkinsos-session > "$LOG_DIR/perkinsos-desktop.log" 2>&1
+perkinsos-compositor -s perkinsos-session > "$LOG_DIR/perkinsos-desktop.log" 2>&1
+# The compositor has exited: the desktop session is over.
+systemctl --user stop perkinsos-session.target 2> /dev/null

@@ -34,7 +34,9 @@ SSH="$SSH -o UserKnownHostsFile=$VM/known_hosts -o LogLevel=ERROR -o ConnectTime
 # Ubuntu's packages for building and running the desktop (see distro/Makefile).
 PACKAGES="build-essential pkg-config libwlroots-0.19-dev libwayland-dev \
 	wayland-protocols libxkbcommon-dev libcairo2-dev \
-	foot fonts-dejavu-core rsync"
+	foot fonts-dejavu-core rsync \
+	fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
+	xdg-desktop-portal xdg-desktop-portal-gtk"
 
 # Download the cloud image and refuse it if the checksum is wrong.
 fetch() {
@@ -165,8 +167,8 @@ vm_ssh() {
 
 install() {
 	running || { echo "Not running. Run: distro/vm.sh start"; exit 1; }
-	# Only install packages the first time: it is the slow part.
-	vm_ssh "dpkg -s libwlroots-0.19-dev > /dev/null 2>&1 || {
+	# Only install packages when one is missing: it is the slow part.
+	vm_ssh "dpkg -s $PACKAGES > /dev/null 2>&1 || {
 		sudo apt-get update -q &&
 		sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q $PACKAGES; }"
 	rsync -a --delete -e "$SSH" \

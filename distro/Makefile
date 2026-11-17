@@ -10,7 +10,9 @@
 # Packages needed, by their Ubuntu 26.04 names:
 #   build-essential pkg-config libwlroots-0.19-dev libwayland-dev
 #   wayland-protocols libxkbcommon-dev libcairo2-dev
-# and to run it: foot (the terminal) and fonts-dejavu-core.
+# and to run it: foot (the terminal) and fonts-dejavu-core. For apps to be
+# usable: fonts-noto-* (other scripts, emoji) and xdg-desktop-portal with
+# xdg-desktop-portal-gtk (file open and save dialogs for sandboxed apps).
 
 PREFIX ?= /usr/local
 PKG_CONFIG ?= pkg-config
@@ -79,6 +81,10 @@ install:
 	install -d $(DESTDIR)$(PREFIX)/share/perkinsos/models
 	install -m 0644 $(OVERLAY)/usr/share/perkinsos/models/*.mesh $(DESTDIR)$(PREFIX)/share/perkinsos/models/
 	install -D -m 0644 $(OVERLAY)/etc/xdg/foot/foot.ini $(DESTDIR)/etc/xdg/foot/foot.ini
+	install -D -m 0644 perkinsos-portals.conf \
+		$(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/perkinsos-portals.conf
+	install -D -m 0644 perkinsos-session.target \
+		$(DESTDIR)$(PREFIX)/lib/systemd/user/perkinsos-session.target
 
 clean:
 	rm -rf $(BUILD)

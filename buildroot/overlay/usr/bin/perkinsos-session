@@ -3,6 +3,17 @@
 # (it is the -s argument in /etc/init.d/S99desktop), with WAYLAND_DISPLAY set
 # so that clients started here know which compositor to connect to.
 
+# On a distro with D-Bus and systemd (not the Buildroot image, which has
+# neither): tell them which display this session is, so that services they
+# start on demand can open windows here, then announce that a desktop
+# session is running. Without this a sandboxed app such as Firefox gets no
+# file dialogs (see distro/perkinsos-portals.conf).
+if command -v dbus-update-activation-environment > /dev/null; then
+	dbus-update-activation-environment --systemd \
+		WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+	systemctl --user start perkinsos-session.target
+fi
+
 # The wallpaper: a background-layer client that draws the HUD backdrop.
 if command -v perkinsos-wallpaper > /dev/null; then
 	perkinsos-wallpaper &
