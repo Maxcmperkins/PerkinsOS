@@ -12,9 +12,14 @@
 # PyCharm) cannot open a window. docs/APPS.md records how each app did.
 set -eu
 
+# The file manager: Thunar, Xfce's. It is light, draws through Wayland
+# itself (GTK 3) and does not need the rest of its desktop. gvfs-backends
+# gives it the Trash, USB drives and network shares; tumbler draws
+# thumbnails; the archive plugin adds "Extract here".
+FILE_MANAGER="thunar thunar-archive-plugin gvfs-backends tumbler"
 # From Ubuntu's own archive.
 APT_PACKAGES="git python3 python3-venv nodejs npm sqlite3 docker.io \
-	sqlitebrowser inkscape blender obs-studio"
+	sqlitebrowser inkscape blender obs-studio $FILE_MANAGER"
 # Snaps, for apps Ubuntu does not package.
 SNAPS="discord"
 # VS Code comes from Microsoft's .deb, not its snap: the snap's start-up
@@ -24,9 +29,9 @@ VSCODE_DEB=https://update.code.visualstudio.com/latest/linux-deb-x64/stable
 
 # The .desktop names (see apps_load_pinned() in shell/common/apps.c) of
 # apps that work on PerkinsOS (docs/APPS.md). Only a few: the dock has
-# room for about eight buttons on a 1280-pixel screen, and the rest are a
+# room for about nine buttons on a 1280-pixel screen, and the rest are a
 # search away in the launcher.
-PINS="firefox_firefox com.microsoft.VSCode discord_discord blender org.inkscape.Inkscape"
+PINS="thunar firefox_firefox com.microsoft.VSCode discord_discord blender org.inkscape.Inkscape"
 
 # Discord is Electron, which uses X11 unless told otherwise, and ignores
 # the ELECTRON_OZONE_PLATFORM_HINT variable. A copy of its .desktop file
@@ -58,6 +63,9 @@ install_apps() {
 		rm -f "$deb"
 	fi
 	discord_on_wayland
+	# Open folders in Thunar: "show in folder" in Firefox, and any app
+	# that asks the system to open a directory.
+	xdg-mime default thunar.desktop inode/directory
 	echo "Installed. Open them from the launcher (Alt+P)."
 }
 

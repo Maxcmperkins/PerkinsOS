@@ -12,6 +12,7 @@ window only if it can talk Wayland itself.
 
 | App | Version | From | Notes |
 | --- | --- | --- | --- |
+| Thunar (file manager) | | Ubuntu | With gvfs (Trash, drives, network shares) and thumbnails. The default for opening folders (`xdg-mime`) |
 | Firefox | snap | Ubuntu | File open/save dialogs through `xdg-desktop-portal` (M1 slice 1) |
 | VS Code | 1.146.0 | Microsoft's `.deb` | Uses Wayland on its own. The **snap does not work**: see below |
 | Discord | 1.0.168 | snap | Only with `--ozone-platform=wayland`; `apps.sh` adds it (see below) |
@@ -21,8 +22,8 @@ window only if it can talk Wayland itself.
 | DB Browser for SQLite | | Ubuntu | |
 | git, Python 3.14, Node 22 + npm, sqlite3, Docker 29 | | Ubuntu | Command line, in the terminal. Docker needs `sudo` (you're not in the `docker` group) |
 
-Pinned to the dock by `distro/apps.sh pin`: Firefox, VS Code, Discord,
-Blender, Inkscape. The rest are in the launcher (Alt+P).
+Pinned to the dock by `distro/apps.sh pin`: Thunar, Firefox, VS Code,
+Discord, Blender, Inkscape. The rest are in the launcher (Alt+P).
 
 ## What went wrong, and the fix
 

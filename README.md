@@ -92,12 +92,12 @@ The same `compositor/` and `shell/` also build on Ubuntu 26.04, where apps come 
 distro/vm.sh create    # once: make a test VM from Ubuntu's cloud image
 distro/vm.sh start     # boot it; a window opens
 distro/vm.sh install   # copy this repo in, build it, install it
-distro/vm.sh ssh PerkinsOS/distro/apps.sh       # VS Code, Discord, Blender, Inkscape, OBS, ...
+distro/vm.sh ssh PerkinsOS/distro/apps.sh       # a file manager, VS Code, Discord, Blender, Inkscape, OBS, ...
 distro/vm.sh ssh PerkinsOS/distro/apps.sh pin   # put the main ones on the dock
 distro/vm.sh stop
 ```
 
-Tested there: Firefox (with file dialogs), VS Code, Discord, Blender, Inkscape, OBS Studio and DB Browser for SQLite open and work, with Noto fonts for other languages and emoji. Which apps work and why some needed help: [docs/APPS.md](docs/APPS.md). Apps that only speak X11 (Steam, IntelliJ, PyCharm) need XWayland, which is next; the VM already has the XWayland server installed. This path has no automated test yet.
+Tested there: the Thunar file manager, Firefox (with file dialogs), VS Code, Discord, Blender, Inkscape, OBS Studio and DB Browser for SQLite open and work, with Noto fonts for other languages and emoji. Which apps work and why some needed help: [docs/APPS.md](docs/APPS.md). Apps that only speak X11 (Steam, IntelliJ, PyCharm) need XWayland, which is next; the VM already has the XWayland server installed. This path has no automated test yet.
 
 ## Repo layout
 
