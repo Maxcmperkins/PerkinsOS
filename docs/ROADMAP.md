@@ -73,6 +73,8 @@ The services every desktop app assumes are there.
 
 **Done when:** I lock and unlock the screen, a notification appears, a video plays with sound, and an X11-only app opens.
 
+**Status (18 Nov 2026), on Ubuntu:** notifications (mako, in the HUD's colours), sound (PipeWire; the test VM has a sound card that plays through Windows), the keyring, and password prompts (MATE's polkit agent; GNOME's crashes without X) all work, started by `perkinsos-session.target`. The XWayland server is installed, waiting for the compositor side. Still to do, all needing compositor code: XWayland itself, the lock screen (`ext-session-lock`), and volume keys. Then the login screen.
+
 ### M4. Boot the laptop from a USB stick (L)
 
 Stage 2 of the plan. First contact with real hardware: MSI Prestige 14 AI Studio, Intel Arc graphics, Intel BE200 wifi.

@@ -5,8 +5,12 @@
 # stop when it stops. Desktops do not start that target directly; each has
 # its own target bound to it, and this is ours. perkinsos-session starts it
 # once the compositor is ready, and it goes away when the session ends.
+#
+# Wants= also starts the session's own services with it: mako shows
+# notifications (with our style: mako.service.d/perkinsos.conf), and the
+# polkit agent asks for your password when an app needs root.
 [Unit]
 Description=PerkinsOS desktop session
 BindsTo=graphical-session.target
-Wants=graphical-session-pre.target
+Wants=graphical-session-pre.target mako.service perkinsos-polkit-agent.service
 After=graphical-session-pre.target

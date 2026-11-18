@@ -1,0 +1,18 @@
+# The polkit agent: the window that asks for your password when an app
+# wants to do something as root (install a package, mount a drive).
+# Without one, such requests just fail.
+#
+# MATE's agent, not GNOME's (policykit-1-gnome): GNOME's is old (0.105)
+# and crashes when it opens its dialog without an X server, so on a
+# Wayland-only desktop every request fails with "Not authorized". MATE's
+# is a maintained fork of it that works. Its own autostart file only
+# starts it on MATE, so perkinsos-session.target starts it instead. It
+# warns that there is no org.gnome.SessionManager; it does not need one.
+[Unit]
+Description=PerkinsOS polkit agent (password prompts)
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/libexec/polkit-mate-authentication-agent-1
+Restart=on-failure

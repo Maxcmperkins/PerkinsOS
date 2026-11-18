@@ -131,6 +131,7 @@ Since then: the cockpit, and the start of a longer goal, using PerkinsOS in plac
 - [ ] XWayland, for apps that only speak X11 (Steam, IntelliJ, PyCharm)
 - [ ] Draw with the graphics card
 - [ ] Lock screen, notifications, sound, login
+  - [x] Notifications in the HUD style, sound, saved passwords, password prompts
 - [ ] Boot my laptop from a USB stick
 - [ ] Install beside Windows
 - [ ] A month without Windows: 1.0

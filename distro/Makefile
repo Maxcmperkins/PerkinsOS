@@ -16,6 +16,10 @@
 # For apps that only speak X11: xwayland (the X server the compositor
 # starts; Ubuntu's wlroots is built with WLR_HAS_XWAYLAND, Buildroot's is
 # not), and x11-apps (xeyes, xclock: the simplest X11 programs, to test it).
+# The session's services (docs/ROADMAP.md, M3): mako-notifier and
+# libnotify-bin (notifications), pipewire-audio, wireplumber and pavucontrol
+# (sound), gnome-keyring and libsecret-tools (saved passwords), and
+# mate-polkit and pkexec (password prompts).
 
 PREFIX ?= /usr/local
 PKG_CONFIG ?= pkg-config
@@ -88,6 +92,13 @@ install:
 		$(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/perkinsos-portals.conf
 	install -D -m 0644 perkinsos-session.target \
 		$(DESTDIR)$(PREFIX)/lib/systemd/user/perkinsos-session.target
+	install -D -m 0644 perkinsos-polkit-agent.service \
+		$(DESTDIR)$(PREFIX)/lib/systemd/user/perkinsos-polkit-agent.service
+	install -D -m 0644 mako.config $(DESTDIR)$(PREFIX)/share/perkinsos/mako.config
+	# @PREFIX@ in the drop-in becomes where mako.config was installed.
+	mkdir -p $(DESTDIR)$(PREFIX)/lib/systemd/user/mako.service.d
+	sed 's|@PREFIX@|$(PREFIX)|' mako-perkinsos.conf \
+		> $(DESTDIR)$(PREFIX)/lib/systemd/user/mako.service.d/perkinsos.conf
 
 clean:
 	rm -rf $(BUILD)

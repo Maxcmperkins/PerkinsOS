@@ -37,7 +37,9 @@ PACKAGES="build-essential pkg-config libwlroots-0.19-dev libwayland-dev \
 	foot fonts-dejavu-core rsync \
 	fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
 	xdg-desktop-portal xdg-desktop-portal-gtk \
-	xwayland x11-apps"
+	xwayland x11-apps \
+	mako-notifier libnotify-bin pipewire-audio wireplumber pavucontrol \
+	gnome-keyring libsecret-tools mate-polkit pkexec"
 
 # Download the cloud image and refuse it if the checksum is wrong.
 fetch() {
@@ -69,6 +71,9 @@ users:
     gecos: Max
     shell: /bin/bash
     sudo: "ALL=(ALL) NOPASSWD:ALL"
+    # In the sudo group, as a normal install would be: password prompts
+    # (polkit) ask for a member of it, and with none the agent crashes.
+    groups: [sudo]
     lock_passwd: true
     ssh_authorized_keys:
       - $(cat "$VM/id_ed25519.pub")
@@ -101,8 +106,13 @@ start() {
 		accel="-accel tcg,thread=multi -cpu max"
 	fi
 	display=none
+	# A sound card for the VM. Its sound goes nowhere unless we have a
+	# window: then QEMU plays it through PulseAudio, which on WSL is the
+	# server WSLg provides (PULSE_SERVER), so it comes out of Windows.
+	audio=none
 	if [ -z "${HEADLESS:-}" ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
 		display=gtk,zoom-to-fit=on
+		[ -n "${PULSE_SERVER:-}" ] && audio="pa,server=$PULSE_SERVER"
 	fi
 	# On the first boot only, hand cloud-init its settings: it fetches them
 	# from a tiny web server on this machine (10.0.2.2 is "the host" as seen
@@ -126,6 +136,7 @@ start() {
 		-device virtio-net-pci,netdev=net0 \
 		-device virtio-vga,xres=1280,yres=800 \
 		-device virtio-keyboard-pci -device virtio-tablet-pci \
+		-audiodev "$audio",id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 \
 		-display $display -serial file:"$VM/serial.log" \
 		-monitor unix:"$VM/monitor.sock",server,nowait \
 		-qmp unix:"$VM/qmp.sock",server,nowait \
@@ -176,6 +187,9 @@ install() {
 		--exclude output --exclude dl --exclude .buildroot --exclude .git \
 		--exclude distro/build ./ max@127.0.0.1:PerkinsOS/
 	vm_ssh 'cd PerkinsOS && make -C distro && sudo make -C distro install'
+	# The user's systemd reads unit files when it starts; tell it to read
+	# them again, or a running session misses new ones (mako's drop-in).
+	vm_ssh 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user daemon-reload'
 	# Start the desktop when "max" logs in on the first console. Not `exec`:
 	# if the compositor fails you are left at a shell prompt, not a login loop.
 	vm_ssh 'grep -q perkinsos-start ~/.profile || cat >> ~/.profile <<"EOF"
