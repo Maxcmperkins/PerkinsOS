@@ -128,14 +128,16 @@ PY
 
 	# Maximize: a maximized window fills the screen except the dock. The
 	# terminal reports its own size in character cells once it has been
-	# resized (a normal foot window is 80x24).
+	# resized. A normal foot window is 80x24 whatever the font, so
+	# "maximized" means at least half as big again both ways. (A fixed row
+	# count would depend on the font: VT323's cells are tall and narrow.)
 	send 'WAYLAND_DISPLAY=wayland-0 foot --maximized sh -c "sleep 2; stty size > /tmp/maxsize; sleep 60" > /dev/null 2>&1 &'
 	send 'sleep 4; echo cells=$(tr " " x < /tmp/maxsize)'
 	wait_for '^cells=[0-9]'
 	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/maximize-test.png > /dev/null
 	CELLS=$(grep -a '^cells=' "$LOG" | tr -d '\r' | cut -d= -f2)
 	ROWS=${CELLS%x*}; COLS=${CELLS#*x}
-	[ "$ROWS" -ge 40 ] && [ "$COLS" -ge 120 ] || fail "maximized terminal is only $CELLS cells"
+	[ "$ROWS" -ge 36 ] && [ "$COLS" -ge 120 ] || fail "maximized terminal is only $CELLS cells"
 	# The dock must still be visible: its top edge line and a button
 	# outline are the same pixels as in the first screenshot.
 	python3 - "$SHOT" output/maximize-test.png <<'PY' || fail "the maximized window covers the dock"

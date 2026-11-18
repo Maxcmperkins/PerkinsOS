@@ -88,6 +88,13 @@ install:
 	install -d $(DESTDIR)$(PREFIX)/share/perkinsos/models
 	install -m 0644 $(OVERLAY)/usr/share/perkinsos/models/*.mesh $(DESTDIR)$(PREFIX)/share/perkinsos/models/
 	install -D -m 0644 $(OVERLAY)/etc/xdg/foot/foot.ini $(DESTDIR)/etc/xdg/foot/foot.ini
+	# The pixel font VT323 and its licence; fc-cache tells fontconfig, the
+	# library apps ask for fonts, that it is there.
+	install -D -m 0644 $(OVERLAY)/usr/share/fonts/vt323/VT323-Regular.ttf \
+		$(DESTDIR)$(PREFIX)/share/fonts/vt323/VT323-Regular.ttf
+	install -D -m 0644 $(OVERLAY)/usr/share/fonts/vt323/OFL.txt \
+		$(DESTDIR)$(PREFIX)/share/fonts/vt323/OFL.txt
+	[ -n "$(DESTDIR)" ] || fc-cache $(PREFIX)/share/fonts
 	install -D -m 0644 perkinsos-portals.conf \
 		$(DESTDIR)$(PREFIX)/share/xdg-desktop-portal/perkinsos-portals.conf
 	install -D -m 0644 perkinsos-session.target \

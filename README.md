@@ -145,6 +145,8 @@ The Typhoon and F-35 meshes in `buildroot/overlay/usr/share/perkinsos/models/` a
 
 Both were changed for this project: reduced in detail, landing gear removed, and each vertex given one colour taken from the model's texture. Both licences allow non-commercial use only, and the F-35's also requires anything made from it to carry the same licence. So `typhoon.mesh` is under CC BY-NC 4.0 and `f35.mesh` under CC BY-NC-SA 4.0, not under whatever covers the rest of this repo. The same notice is in [LICENSE.txt](buildroot/overlay/usr/share/perkinsos/models/LICENSE.txt) beside the files.
 
+The pixel font, VT323 (Copyright 2011, The VT323 Project Authors), is under the [SIL Open Font License 1.1](buildroot/overlay/usr/share/fonts/vt323/OFL.txt), taken unchanged from [Google Fonts](https://github.com/google/fonts/tree/main/ofl/vt323).
+
 ## Later (not now)
 
 Ideas parked here so they don't derail the plan. The long-term goal, running real apps and using this instead of Windows, has its own plan, [docs/PLAN-DAILY-DRIVER.md](docs/PLAN-DAILY-DRIVER.md), and a roadmap of milestones, [docs/ROADMAP.md](docs/ROADMAP.md).
