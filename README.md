@@ -153,3 +153,4 @@ Ideas parked here so they don't derail the plan. The long-term goal, running rea
 - Icons on the dock; System Info as cockpit gauges
 - Server-side title bars, so every window gets the same one
 - Multiple screens: layer surfaces and maximize currently assume the first one
+- Real weather outside the jet: the cloud deck matches the real cloud cover where I am. A fetcher (systemd timer, Open-Meteo, location from a config file) writes a small weather file; the wallpaper reads it and sets the sea/cloud threshold in `sky.c` to the matching percentile of the cloud texture. Later: rain on the canopy, night sky, wind speed
