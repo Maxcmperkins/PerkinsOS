@@ -108,7 +108,7 @@ static void draw(struct dock *dock) {
 
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_NORMAL);
-	cairo_set_font_size(cr, 13);
+	cairo_set_font_size(cr, FONT_SIZE(13));
 	cairo_set_line_width(cr, HUD_LINE);
 
 	/* Buttons: an outline with the label inside, like the soft keys round

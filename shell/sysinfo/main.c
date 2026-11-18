@@ -100,8 +100,8 @@ static void draw(struct sysinfo *app) {
 	cairo_fill(cr);
 
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
-		CAIRO_FONT_WEIGHT_BOLD);
-	cairo_set_font_size(cr, 13);
+		CAIRO_FONT_WEIGHT_NORMAL);
+	cairo_set_font_size(cr, FONT_SIZE(13));
 	cairo_set_source_rgb(cr, HUD_GREEN);
 	draw_text(cr, "SYSTEM INFO", 12, TITLE_HEIGHT / 2.0);
 

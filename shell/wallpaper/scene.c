@@ -308,7 +308,7 @@ static void draw_hud(cairo_t *cr, const struct layout *l,
 
 	cairo_set_source_rgb(cr, HUD_GREEN);
 	cairo_set_line_width(cr, HUD_LINE);
-	cairo_set_font_size(cr, 11);
+	cairo_set_font_size(cr, FONT_SIZE(11));
 
 	/* Pitch ladder: a rung every 5 degrees, measured from the horizon,
 	 * so it moves up and down with the real horizon outside. Above the
@@ -375,7 +375,7 @@ static void draw_hud(cairo_t *cr, const struct layout *l,
 
 	/* Speed on the left of the glass, altitude on the right. */
 	char value[16];
-	cairo_set_font_size(cr, 13);
+	cairo_set_font_size(cr, FONT_SIZE(13));
 	snprintf(value, sizeof(value), "%d", f->speed);
 	cairo_rectangle(cr, l->hud_x + 14, l->aim_y - 11, 44, 22);
 	cairo_stroke(cr);
@@ -387,7 +387,7 @@ static void draw_hud(cairo_t *cr, const struct layout *l,
 
 	/* The aircraft you are following, as a HUD would tag it: its name
 	 * just below it, in the gap down the middle of the pitch ladder. */
-	cairo_set_font_size(cr, 10);
+	cairo_set_font_size(cr, FONT_SIZE(10));
 	text_centred(cr, "TYPHOON", l->cx, l->aim_y + 32);
 
 	cairo_restore(cr);
@@ -476,7 +476,7 @@ static int draw_rwr(struct scene *scene, cairo_t *cr, const struct layout *l) {
 	const struct process *worst = NULL;
 	int threats = 0;
 
-	cairo_set_font_size(cr, 11);
+	cairo_set_font_size(cr, FONT_SIZE(11));
 	for (int i = 0; i < scene->processes.count; i++) {
 		const struct process *process = &scene->processes.items[i];
 		if (process->cpu_percent < 0.5) {
@@ -546,7 +546,7 @@ static void draw_data_display(struct scene *scene, cairo_t *cr,
 	double x = l->data_x + 14, y = l->data_y + 40;
 	double right = l->data_x + l->data_w / 2 + 20;
 	char row[48];
-	cairo_set_font_size(cr, 12);
+	cairo_set_font_size(cr, FONT_SIZE(12));
 
 	/* Left half: the target. */
 	if (target != NULL) {
@@ -622,7 +622,7 @@ static void draw_key(cairo_t *cr, const struct layout *l, int slot, bool lit) {
 	/* The name. Lit, it is shown inverted in a box, which is how a real
 	 * display marks the option that is selected. */
 	double half = legend_width(l) / 2;
-	cairo_set_font_size(cr, 11);
+	cairo_set_font_size(cr, FONT_SIZE(11));
 	if (lit) {
 		cairo_rectangle(cr, lx - half, ly - LEGEND_HEIGHT / 2.0,
 			2 * half, LEGEND_HEIGHT);
@@ -726,7 +726,7 @@ static void draw_dial_face(cairo_t *cr, const struct dial *dial,
 	cairo_set_line_width(cr, 3);
 	cairo_stroke(cr);
 
-	cairo_set_font_size(cr, 9);
+	cairo_set_font_size(cr, FONT_SIZE(9));
 	cairo_set_source_rgb(cr, HUD_DIM);
 	double tx, ty;
 	polar(x, y, dial_bearing(0), DIAL_RADIUS - 17, &tx, &ty);
@@ -812,7 +812,7 @@ static void draw_gauge_face(cairo_t *cr, const char *name, double x, double y) {
 		polar(x, y, hour * 30, GAUGE_RADIUS - 1, &x2, &y2);
 		line(cr, x1, y1, x2, y2);
 	}
-	cairo_set_font_size(cr, 6.5);
+	cairo_set_font_size(cr, FONT_SIZE(6.5));
 	cairo_set_source_rgb(cr, HUD_DIM);
 	text_centred(cr, name, x, y + GAUGE_RADIUS * 0.48);
 }
@@ -916,7 +916,7 @@ static void draw_screen(cairo_t *cr, const char *title, double cx, double cy,
 	}
 
 	/* The screen's name in its top-left corner. */
-	cairo_set_font_size(cr, 11);
+	cairo_set_font_size(cr, FONT_SIZE(11));
 	cairo_set_source_rgb(cr, HUD_GREEN);
 	draw_text(cr, title, cx - half + 5, cy - half + 10);
 }

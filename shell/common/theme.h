@@ -18,8 +18,18 @@
 #define HUD_PANEL  0.015, 0.06, 0.03  /* panel backgrounds */
 #define HUD_BLACK  0.005, 0.025, 0.012 /* the darkest background */
 
-/* The font every PerkinsOS client draws with (the dejavu package). */
-#define UI_FONT "DejaVu Sans Mono"
+/* The font every PerkinsOS client draws with: VT323, a pixel font in the
+ * style of an old computer terminal (/usr/share/fonts/vt323). It has no
+ * bold, so ask for CAIRO_FONT_WEIGHT_NORMAL only: "bold" would be faked by
+ * smudging the letters. */
+#define UI_FONT "VT323"
+
+/* Font sizes in the code are written as they looked in DejaVu Sans Mono,
+ * the font before VT323: cairo_set_font_size(cr, FONT_SIZE(13)). VT323
+ * draws about 25% shorter at the same size, so every size is scaled up
+ * here, in one place. Changing the font means changing these two lines. */
+#define FONT_SCALE 1.4
+#define FONT_SIZE(size) ((size) * FONT_SCALE)
 
 /* Thickness of HUD lines, in pixels. */
 #define HUD_LINE 1.5

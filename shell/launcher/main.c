@@ -118,7 +118,7 @@ static void draw(struct launcher *launcher) {
 
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_NORMAL);
-	cairo_set_font_size(cr, 14);
+	cairo_set_font_size(cr, FONT_SIZE(14));
 
 	/* Search box: the query followed by a cursor bar. */
 	int x = PADDING, y = PADDING, w = WIDTH - 2 * PADDING;
