@@ -17,9 +17,15 @@ set -eu
 # gives it the Trash, USB drives and network shares; tumbler draws
 # thumbnails; the archive plugin adds "Extract here".
 FILE_MANAGER="thunar thunar-archive-plugin gvfs-backends tumbler"
+# Apps to open the files you download, chosen to be light GTK 3 apps that
+# draw through Wayland themselves, like Thunar: Ristretto (pictures),
+# Atril (PDFs), Mousepad (text) and Xarchiver (zip files, and Thunar's
+# "Extract here"). Without them, pictures opened in ImageMagick's X11-only
+# viewer and PDFs in Inkscape. set_defaults() below makes them the default.
+VIEWERS="ristretto atril mousepad xarchiver"
 # From Ubuntu's own archive.
 APT_PACKAGES="git python3 python3-venv nodejs npm sqlite3 docker.io \
-	sqlitebrowser inkscape blender obs-studio $FILE_MANAGER"
+	sqlitebrowser inkscape blender obs-studio $FILE_MANAGER $VIEWERS"
 # Snaps, for apps Ubuntu does not package.
 SNAPS="discord"
 # VS Code comes from Microsoft's .deb, not its snap: the snap's start-up
@@ -45,6 +51,25 @@ discord_on_wayland() {
 		"$from" > "$to"
 }
 
+# Which app opens which kind of file or link: what happens when you
+# double-click in Thunar, open a download in Firefox, or click a link in
+# Discord. Stored per user in ~/.config/mimeapps.list.
+set_defaults() {
+	xdg-mime default thunar.desktop inode/directory
+	xdg-mime default org.xfce.ristretto.desktop \
+		image/png image/jpeg image/gif image/webp image/bmp image/svg+xml
+	xdg-mime default atril.desktop application/pdf
+	xdg-mime default org.xfce.mousepad.desktop text/plain text/markdown
+	xdg-mime default xarchiver.desktop application/zip application/x-tar \
+		application/gzip application/x-7z-compressed
+	# Links: http, https and web pages go to Firefox. Not `xdg-settings set
+	# default-web-browser`: it looks for the .desktop file in XDG_DATA_DIRS,
+	# which over ssh lacks snap's folder, so it fails (exit 2) and stops
+	# this script. xdg-mime writes the same lines to mimeapps.list.
+	xdg-mime default firefox_firefox.desktop \
+		x-scheme-handler/http x-scheme-handler/https text/html
+}
+
 install_apps() {
 	# shellcheck disable=SC2086
 	if ! dpkg -s $APT_PACKAGES > /dev/null 2>&1; then
@@ -63,9 +88,7 @@ install_apps() {
 		rm -f "$deb"
 	fi
 	discord_on_wayland
-	# Open folders in Thunar: "show in folder" in Firefox, and any app
-	# that asks the system to open a directory.
-	xdg-mime default thunar.desktop inode/directory
+	set_defaults
 	echo "Installed. Open them from the launcher (Alt+P)."
 }
 
