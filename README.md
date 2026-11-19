@@ -132,6 +132,7 @@ Since then: the cockpit, and the start of a longer goal, using PerkinsOS in plac
 - [ ] Draw with the graphics card
 - [ ] Lock screen, notifications, sound, login
   - [x] Notifications in the HUD style, sound, saved passwords, password prompts
+  - [x] Login screen (greetd and tuigreet)
 - [ ] Boot my laptop from a USB stick
 - [ ] Install beside Windows
 - [ ] A month without Windows: 1.0

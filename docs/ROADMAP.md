@@ -73,7 +73,9 @@ The services every desktop app assumes are there.
 
 **Done when:** I lock and unlock the screen, a notification appears, a video plays with sound, and an X11-only app opens.
 
-**Status (18 Nov 2026), on Ubuntu:** notifications (mako, in the HUD's colours), sound (PipeWire; the test VM has a sound card that plays through Windows), the keyring, and password prompts (MATE's polkit agent; GNOME's crashes without X) all work, started by `perkinsos-session.target`. The XWayland server is installed, waiting for the compositor side. Still to do, all needing compositor code: XWayland itself, the lock screen (`ext-session-lock`), and volume keys. Then the login screen.
+**Status (18 Nov 2026), on Ubuntu:** notifications (mako, in the HUD's colours), sound (PipeWire; the test VM has a sound card that plays through Windows), the keyring, and password prompts (MATE's polkit agent; GNOME's crashes without X) all work, started by `perkinsos-session.target`. The XWayland server is installed, waiting for the compositor side. Still to do, all needing compositor code: XWayland itself, the lock screen (`ext-session-lock`), and volume keys.
+
+**Login screen (19 Nov 2026), on Ubuntu:** greetd with tuigreet in the HUD's greens (`distro/greetd.toml`, installed by `sudo make -C distro install-login`). Tested in the VM: it boots to the desktop, quitting the desktop shows the login screen, and logging in with a password starts the desktop again. Opening downloads also works now: pictures, PDFs, text and zip files open in light GTK apps (Ristretto, Atril, Mousepad, Xarchiver), and links in Firefox (`distro/apps.sh`).
 
 ### M4. Boot the laptop from a USB stick (L)
 
