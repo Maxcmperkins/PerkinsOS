@@ -11,9 +11,11 @@
 #   distro/vm.sh destroy       delete the VM's disk (keeps the download)
 #
 # `start` opens a window if this terminal has a display; HEADLESS=1 stops
-# that. The user in the VM is "max": no password, logs in on the screen
-# automatically, and sudo needs no password. It is a throwaway test VM,
-# reachable only from this machine (ssh on 127.0.0.1:2222).
+# that. The user in the VM is "max", password "perkinsos" (VM_PASSWORD
+# below); sudo needs no password. After `install`, the VM logs max in to
+# the desktop by itself when it boots; quit the desktop (Alt+Escape) to
+# see the login screen. It is a throwaway test VM, reachable only from
+# this machine (ssh on 127.0.0.1:2222, with a key, not the password).
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -39,7 +41,11 @@ PACKAGES="build-essential pkg-config libwlroots-0.19-dev libwayland-dev \
 	xdg-desktop-portal xdg-desktop-portal-gtk \
 	xwayland x11-apps \
 	mako-notifier libnotify-bin pipewire-audio wireplumber pavucontrol \
-	gnome-keyring libsecret-tools mate-polkit pkexec"
+	gnome-keyring libsecret-tools mate-polkit pkexec greetd tuigreet"
+# The test VM's password for "max", for the login screen and password
+# prompts. Not a secret: the VM is a throwaway, ssh into it takes the key
+# only, and nothing outside this machine can reach it.
+VM_PASSWORD=perkinsos
 
 # Download the cloud image and refuse it if the checksum is wrong.
 fetch() {
@@ -74,16 +80,10 @@ users:
     # In the sudo group, as a normal install would be: password prompts
     # (polkit) ask for a member of it, and with none the agent crashes.
     groups: [sudo]
-    lock_passwd: true
+    lock_passwd: false
+    plain_text_passwd: $VM_PASSWORD
     ssh_authorized_keys:
       - $(cat "$VM/id_ed25519.pub")
-write_files:
-  # Log "max" in on the first console without asking for a password.
-  - path: /etc/systemd/system/getty@tty1.service.d/autologin.conf
-    content: |
-      [Service]
-      ExecStart=
-      ExecStart=-/sbin/agetty --autologin max --noclear %I \$TERM
 EOF
 	touch "$VM/first-boot"
 	echo "Created $VM/disk.qcow2. Next: distro/vm.sh start"
@@ -190,16 +190,28 @@ install() {
 	# The user's systemd reads unit files when it starts; tell it to read
 	# them again, or a running session misses new ones (mako's drop-in).
 	vm_ssh 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user daemon-reload'
-	# Start the desktop when "max" logs in on the first console. Not `exec`:
-	# if the compositor fails you are left at a shell prompt, not a login loop.
-	vm_ssh 'grep -q perkinsos-start ~/.profile || cat >> ~/.profile <<"EOF"
+	login_screen
+	echo "Installed. Restart the desktop with: distro/vm.sh ssh sudo systemctl restart greetd"
+}
 
-# PerkinsOS: start the desktop when logging in on the first console.
-if [ "$(tty)" = /dev/tty1 ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
-	perkinsos-start
-fi
-EOF'
-	echo "Installed. Restart the desktop with: distro/vm.sh ssh sudo systemctl restart getty@tty1"
+# The login screen (distro/greetd.toml), plus one thing only the test VM
+# has: greetd's initial_session logs max in once at boot, so the VM comes
+# up on the desktop for tests and screenshots. Quitting the desktop shows
+# the login screen. VMs made before the login screen logged in through
+# the console instead (a getty drop-in and ~/.profile); remove that.
+login_screen() {
+	vm_ssh "sudo passwd -S max | grep -q ' P ' || echo 'max:$VM_PASSWORD' | sudo chpasswd"
+	vm_ssh 'sudo rm -f /etc/systemd/system/getty@tty1.service.d/autologin.conf
+		sed -i "/^# PerkinsOS: start the desktop/,/^fi$/d" ~/.profile
+		cd PerkinsOS && sudo make -C distro install-login &&
+		sudo tee -a /etc/greetd/config.toml > /dev/null <<"EOF"
+
+# Test VM only (distro/vm.sh): log max in once at boot, without a password.
+[initial_session]
+command = "/usr/local/bin/perkinsos-start"
+user = "max"
+EOF
+		sudo systemctl daemon-reload'
 }
 
 case "${1:-}" in

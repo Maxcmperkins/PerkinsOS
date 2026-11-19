@@ -19,7 +19,8 @@
 # The session's services (docs/ROADMAP.md, M3): mako-notifier and
 # libnotify-bin (notifications), pipewire-audio, wireplumber and pavucontrol
 # (sound), gnome-keyring and libsecret-tools (saved passwords), and
-# mate-polkit and pkexec (password prompts).
+# mate-polkit and pkexec (password prompts). The login screen
+# (install-login): greetd and tuigreet.
 
 PREFIX ?= /usr/local
 PKG_CONFIG ?= pkg-config
@@ -48,7 +49,7 @@ SHELL_LIBS := $(shell $(PKG_CONFIG) --libs $(SHELL_PKGS)) -lm
 SHELL_PROTOCOLS := $(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml \
 	$(WLR_PROTOCOLS)/wlr-layer-shell-unstable-v1.xml
 
-.PHONY: all compositor shell install clean
+.PHONY: all compositor shell install install-login clean
 
 all: compositor shell
 
@@ -106,6 +107,16 @@ install:
 	mkdir -p $(DESTDIR)$(PREFIX)/lib/systemd/user/mako.service.d
 	sed 's|@PREFIX@|$(PREFIX)|' mako-perkinsos.conf \
 		> $(DESTDIR)$(PREFIX)/lib/systemd/user/mako.service.d/perkinsos.conf
+
+# The login screen: greetd with tuigreet (greetd.toml says how). Separate
+# from `install` because it replaces the machine's login: afterwards the
+# machine boots to the PerkinsOS login, not to the console or another
+# desktop's login screen. Needs the packages greetd and tuigreet.
+install-login:
+	mkdir -p $(BUILD)
+	sed 's|@PREFIX@|$(PREFIX)|' greetd.toml > $(BUILD)/greetd.toml
+	install -D -m 0644 $(BUILD)/greetd.toml $(DESTDIR)/etc/greetd/config.toml
+	[ -n "$(DESTDIR)" ] || systemctl enable --force greetd.service
 
 clean:
 	rm -rf $(BUILD)
