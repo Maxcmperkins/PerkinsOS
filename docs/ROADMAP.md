@@ -90,6 +90,8 @@ Stage 2 of the plan. First contact with real hardware: MSI Prestige 14 AI Studio
 
 **Done when:** the laptop boots from the USB to the cockpit, joins my wifi, and Firefox loads a page.
 
+**Status (19 Nov 2026), the image:** `distro/usb.sh build` makes `output/usb/perkinsos-usb.img`, 24 GB, for a 32 GB stick: Ubuntu 26.04 with the desktop, the full kernel, firmware for the Arc graphics and BE200 wifi, NetworkManager and Firefox. No automatic login, no ssh, and sudo asks for the password (`perkinsos`: change it with `passwd` after the first login; greetd cannot force the change). `distro/usb.sh test` boots it in QEMU through UEFI with nothing else helping: it reaches the login screen, logs in to the cockpit, and NetworkManager is connected. Next: write it to a stick (Rufus or balenaEtcher, "DD image") and boot the laptop. Wifi, the touchpad and the screen are untested until then.
+
 ### M5. Install it beside Windows (M)
 
 Stage 3.

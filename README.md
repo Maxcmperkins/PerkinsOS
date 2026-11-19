@@ -134,6 +134,7 @@ Since then: the cockpit, and the start of a longer goal, using PerkinsOS in plac
   - [x] Notifications in the HUD style, sound, saved passwords, password prompts
   - [x] Login screen (greetd and tuigreet)
 - [ ] Boot my laptop from a USB stick
+  - [x] A USB image that boots through UEFI to the login screen and the cockpit, in QEMU (`distro/usb.sh`)
 - [ ] Install beside Windows
 - [ ] A month without Windows: 1.0
 
