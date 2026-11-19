@@ -71,8 +71,11 @@ jobs:
       # The build packages listed at the top of distro/Makefile. Nothing
       # else: the container starts with almost nothing installed, so a
       # package missing from that list fails here.
+      # Acquire::Retries: Ubuntu's archive sometimes refuses connections
+      # from GitHub's runners for a minute; retry rather than fail the job.
       - name: Install Ubuntu's build packages
         run: |
+          echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80-retries
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential pkg-config libwlroots-0.19-dev libwayland-dev \
