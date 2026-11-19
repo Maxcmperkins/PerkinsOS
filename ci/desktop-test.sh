@@ -149,8 +149,23 @@ row = lambda rgb, y: rgb[y * w * 3:(y * w + 400) * 3]      # left 400 px: the bu
 sys.exit(0 if all(row(before, y) == row(after, y) for y in range(h - 48, h)) else 1)
 PY
 	echo "ok: a maximized window fills the screen ($CELLS cells) and stops at the dock"
-	press alt-q
-	sleep 1
+
+	# Close it with the X on the title bar the compositor draws for foot
+	# (foot speaks xdg-decoration). Maximized, the bar is the top 24
+	# pixels of the screen and the 16-pixel close button sits 4 pixels in
+	# from the right: 1004 to 1020 across, 4 to 20 down.
+	# $! is that terminal's process (the last one started with &); other
+	# terminals may still be running, so check this one. It must exit:
+	# foot hangs up its shell first, which without KVM can take seconds.
+	# Each command stays under 80 characters: the serial console wraps
+	# longer ones, and a wrapped "xgone=" would look like the answer.
+	mouse_click 1012 12
+	send 'for i in $(seq 30); do kill -0 $! 2>/dev/null || break; sleep .5; done'
+	send 'kill -0 $! 2>/dev/null; echo xgone=$?'
+	wait_for '^xgone='
+	[ "$(grep -a '^xgone=' "$LOG" | tr -d '\r' | cut -d= -f2)" = 1 ] ||
+		fail "clicking the title bar's X did not close the terminal"
+	echo "ok: the title bar's X closed the window"
 
 	# Alt+drag: with Alt held, the right button resizes the window under
 	# the pointer and the left button moves it. With no other window open,
@@ -190,6 +205,32 @@ inside = brightest(sys.argv[2], 300, 200)       # still covered after the move
 sys.exit(0 if before < 60 and after > 120 and inside < 60 else 1)
 PY
 	echo "ok: Alt+left-drag moved the window"
+	press alt-q
+	sleep 1
+
+	# Drag a window by its title bar, no Alt. A lone new terminal opens
+	# at 40,40, so its bar runs from y 16 to 40. Drag it 200 right and
+	# 200 down; then 100,100 shows the sky and 400,400 is still terminal.
+	# (Not 60,60 as above: with no Alt+drag first, the cursor block is there.)
+	send 'WAYLAND_DISPLAY=wayland-0 foot > /dev/null 2>&1 &'
+	sleep 4
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/titlebar1-test.png > /dev/null
+	mouse_drag 300 28 500 228 left
+	mouse_move 512 150
+	sleep 1
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/titlebar2-test.png > /dev/null
+	python3 - output/titlebar1-test.png output/titlebar2-test.png <<'PY' || fail "dragging the title bar did not move the window"
+import sys
+sys.path.insert(0, "ci")
+from gif import read_png
+def brightest(path, x, y):
+    w, h, rgb = read_png(path)
+    return max(rgb[(y * w + x) * 3:(y * w + x) * 3 + 3])
+before, after = brightest(sys.argv[1], 100, 100), brightest(sys.argv[2], 100, 100)
+inside = brightest(sys.argv[2], 400, 400)
+sys.exit(0 if before < 60 and after > 120 and inside < 60 else 1)
+PY
+	echo "ok: dragging the title bar moved the window"
 	press alt-q
 	sleep 1
 

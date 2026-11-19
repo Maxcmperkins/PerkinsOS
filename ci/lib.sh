@@ -69,6 +69,10 @@ mouse_move() {
 mouse_click() {
 	python3 "$(dirname "${BASH_SOURCE[0]}")/mouse.py" "$QMP" "$1" "$2" click
 }
+# mouse_drag X1 Y1 X2 Y2 left|right: drag with that button.
+mouse_drag() {
+	python3 "$(dirname "${BASH_SOURCE[0]}")/mouse.py" "$QMP" "$1" "$2" drag "$3" "$4" "$5"
+}
 # mouse_alt_drag X1 Y1 X2 Y2 left|right: hold Alt and drag with that button.
 mouse_alt_drag() {
 	python3 "$(dirname "${BASH_SOURCE[0]}")/mouse.py" "$QMP" "$1" "$2" altdrag "$3" "$4" "$5"
