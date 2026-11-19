@@ -43,6 +43,28 @@ COLOURS=${RESULT##*colours=}
 if grep -aq '^compositor=perkinsos' "$LOG"; then
 	# count NAME PROGRAM: print NAME=<number of PROGRAM processes>.
 	count() { send "sleep 2; echo $1=\$(pidof $2 | wc -w)"; wait_for "^$1="; }
+	# window_is shown|gone: wait until a lone window at 40,40 is on screen,
+	# or has left it. Its pixel 300,200 is dark terminal; without it, it
+	# is bright sky. pidof is not enough either way: a program can be
+	# running seconds before its window shows (no KVM), and it can still
+	# be listed after it exits (a zombie, if its parent never waits).
+	window_is() {
+		local i want=0
+		[ "$1" = gone ] && want=1
+		for i in $(seq 40); do
+			python3 "$(dirname "$0")/screenshot.py" "$MONITOR" "$WORK/shown.png" > /dev/null
+			python3 - "$WORK/shown.png" $want <<'PY' && return 0
+import sys
+sys.path.insert(0, "ci")
+from gif import read_png
+w, h, rgb = read_png(sys.argv[1])
+dark = max(rgb[(200 * w + 300) * 3:(200 * w + 300) * 3 + 3]) < 60
+sys.exit(0 if dark == (sys.argv[2] == "0") else 1)
+PY
+			sleep 0.5
+		done
+		fail "the window at 40,40 is not $1"
+	}
 
 	count before foot
 	BEFORE=$(grep -a '^before=' "$LOG" | tr -dc 0-9)
@@ -87,8 +109,12 @@ if grep -aq '^compositor=perkinsos' "$LOG"; then
 	count dockclick foot
 	grep -aq '^dockclick=1' "$LOG" || fail "clicking the dock's TERMINAL button did not open a terminal"
 	echo "ok: clicking TERMINAL on the dock opened a terminal"
+	window_is shown
 	press alt-q
-	count dockclosed foot
+	# Check the screen, not pidof: the dock does not wait() for what it
+	# starts, so the closed terminal lingers as a zombie.
+	window_is gone
+	echo "ok: Alt+Q closed the terminal opened from the dock"
 
 	# Wallpaper: it animates, and clicking a radar contact locks it.
 	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/radar1-test.png > /dev/null
