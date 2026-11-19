@@ -16,6 +16,10 @@
 # the desktop by itself when it boots; quit the desktop (Alt+Escape) to
 # see the login screen. It is a throwaway test VM, reachable only from
 # this machine (ssh on 127.0.0.1:2222, with a key, not the password).
+#
+# distro/usb.sh builds a second VM with this script, by setting VM,
+# SSH_PORT, SEED_PORT, DISK_SIZE, VM_HOSTNAME and UEFI=1 (boot through
+# UEFI firmware, as a laptop does, instead of the old BIOS way).
 set -eu
 cd "$(dirname "$0")/.."
 
@@ -24,9 +28,15 @@ CODENAME=resolute
 IMAGE_NAME=ubuntu-$RELEASE-server-cloudimg-amd64.img
 IMAGE_URL=https://cloud-images.ubuntu.com/releases/$CODENAME/release
 IMAGE=dl/ubuntu/$IMAGE_NAME
-VM=output/distro-vm            # everything about this VM; output/ is not committed
-SSH_PORT=2222
-SEED_PORT=8765
+VM=${VM:-output/distro-vm}     # everything about this VM; output/ is not committed
+SSH_PORT=${SSH_PORT:-2222}
+SEED_PORT=${SEED_PORT:-8765}
+DISK_SIZE=${DISK_SIZE:-20G}
+VM_HOSTNAME=${VM_HOSTNAME:-perkinsos-ubuntu}
+# UEFI firmware for QEMU (Ubuntu's ovmf package): the code is shared and
+# read-only; each VM keeps its own copy of the settings (boot entries).
+OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
+OVMF_VARS=/usr/share/OVMF/OVMF_VARS_4M.fd
 # Built up in two steps so the string has single spaces only: rsync splits
 # it on spaces, and a tab from a line continuation would end up inside an
 # option.
@@ -65,13 +75,13 @@ create() {
 	# A key pair just for this VM, so nothing of yours is used or changed.
 	ssh-keygen -q -t ed25519 -N '' -C perkinsos-vm -f "$VM/id_ed25519"
 	# The disk records only differences from the downloaded image, which
-	# stays untouched. 20G is its maximum size, not what it uses now.
-	qemu-img create -q -f qcow2 -b "$PWD/$IMAGE" -F qcow2 "$VM/disk.qcow2" 20G
+	# stays untouched. DISK_SIZE is its maximum size, not what it uses now.
+	qemu-img create -q -f qcow2 -b "$PWD/$IMAGE" -F qcow2 "$VM/disk.qcow2" "$DISK_SIZE"
 	# First-boot settings, read by cloud-init inside the image.
-	echo "instance-id: perkinsos-vm-1" > "$VM/seed/meta-data"
+	echo "instance-id: perkinsos-$(basename "$VM")-1" > "$VM/seed/meta-data"
 	cat > "$VM/seed/user-data" <<EOF
 #cloud-config
-hostname: perkinsos-ubuntu
+hostname: $VM_HOSTNAME
 users:
   - name: max
     gecos: Max
@@ -125,12 +135,19 @@ start() {
 		seed="-smbios type=1,serial=ds=nocloud;s=http://10.0.2.2:$SEED_PORT/"
 	fi
 
+	firmware=
+	if [ -n "${UEFI:-}" ]; then
+		[ -e "$VM/OVMF_VARS.fd" ] || cp "$OVMF_VARS" "$VM/OVMF_VARS.fd"
+		firmware="-drive if=pflash,format=raw,readonly=on,file=$OVMF_CODE"
+		firmware="$firmware -drive if=pflash,format=raw,file=$VM/OVMF_VARS.fd"
+	fi
+
 	# Same virtual hardware as `make run`, plus more memory for a browser
 	# and port 2222 on this machine forwarded to the VM's ssh.
 	# setsid: run QEMU in a session of its own. Otherwise it is shut down
 	# (by a "hang up" signal) when the terminal that started it closes.
 	# shellcheck disable=SC2086
-	setsid qemu-system-x86_64 -M pc -m 4096 -smp 4 $accel \
+	setsid qemu-system-x86_64 -M pc -m 4096 -smp 4 $accel $firmware \
 		-drive file="$VM/disk.qcow2",if=virtio \
 		-netdev user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22 \
 		-device virtio-net-pci,netdev=net0 \
