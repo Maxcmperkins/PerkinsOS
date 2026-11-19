@@ -128,6 +128,7 @@ Since then: the cockpit, and the start of a longer goal, using PerkinsOS in plac
 - [ ] An hour of normal use in the VM: title bars, minimise, launcher clicks
   - [x] Alt+Tab, Alt+drag move and resize, shut down and restart from the launcher
   - [x] File dialogs, fonts for other languages, everyday apps installed and pinned (`distro/apps.sh`)
+  - [x] Title bars with a close button, for apps that let the compositor draw them (`xdg-decoration`)
 - [ ] XWayland, for apps that only speak X11 (Steam, IntelliJ, PyCharm)
 - [ ] Draw with the graphics card
 - [ ] Lock screen, notifications, sound, login
@@ -155,6 +156,6 @@ Ideas parked here so they don't derail the plan. The long-term goal, running rea
 
 - Key repeat in the launcher, and clicking a result to start it
 - Icons on the dock; System Info as cockpit gauges
-- Server-side title bars, so every window gets the same one
+- The window's name in the title bar; title bars for GTK apps too (they draw their own: GTK does not speak `xdg-decoration`)
 - Multiple screens: layer surfaces and maximize currently assume the first one
 - Real weather outside the jet: the cloud deck matches the real cloud cover where I am. A fetcher (systemd timer, Open-Meteo, location from a config file) writes a small weather file; the wallpaper reads it and sets the sea/cloud threshold in `sky.c` to the matching percentile of the cloud texture. Later: rain on the canopy, night sky, wind speed
