@@ -1054,8 +1054,11 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->destroy.link);
 	wl_list_remove(&output->commit.link);
 	wl_list_remove(&output->link);
-	/* PerkinsOS: the wallpaper rectangle goes with its screen. */
-	wlr_scene_node_destroy(&output->wallpaper->node);
+	/* PerkinsOS: the wallpaper rectangle goes with its screen, unless
+	 * the whole scene went first (at exit: see main()). */
+	if (output->wallpaper != NULL) {
+		wlr_scene_node_destroy(&output->wallpaper->node);
+	}
 	free(output);
 }
 
@@ -2133,6 +2136,14 @@ int main(int argc, char *argv[]) {
 
 	wl_list_remove(&server.new_output.link);
 
+	/* PerkinsOS: destroying the scene frees every node in it, our
+	 * wallpaper rectangles included. The screens are destroyed after
+	 * that, by wlr_backend_destroy(), and output_destroy() must not
+	 * destroy their rectangles a second time. */
+	struct tinywl_output *output;
+	wl_list_for_each(output, &server.outputs, link) {
+		output->wallpaper = NULL;
+	}
 	wlr_scene_node_destroy(&server.scene->tree.node);
 	wlr_xcursor_manager_destroy(server.cursor_mgr);
 	wlr_cursor_destroy(server.cursor);
