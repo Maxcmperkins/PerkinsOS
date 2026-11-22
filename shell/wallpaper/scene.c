@@ -12,6 +12,7 @@
  *               right screen: RWR, each "threat" a program using the CPU
  *   keys        the buttons between the screens start apps
  *   dials       CPU, memory, load and task count (on a wide screen)
+ *   consoles    caution lights and switches, where the dials don't fit
  *
  * Everything is designed on a canvas 768 units tall (DESIGN_HEIGHT) and
  * scaled to the real screen, so the numbers in this file are design units,
@@ -939,6 +940,277 @@ static void glareshield_curve(cairo_t *cr, const struct layout *l, double down) 
 	cairo_curve_to(cr, w * 0.70, top - 8, w * 0.75, top + 12, w, top + 16);
 }
 
+/* ---- panel details ----
+ *
+ * Small fittings that make the panel look built rather than drawn: plates
+ * screwed onto it, quick-release fasteners, caution lights, switches and
+ * the ejection handle. None of it moves, so all of it is drawn once, into
+ * the cached cockpit, and costs nothing per frame.
+ */
+#define CAUTION_AMBER 1.00, 0.68, 0.12
+#define PLACARD 0.78, 0.80, 0.78   /* white stencilled lettering */
+
+/* A quick-release fastener (a "Dzus"): a domed head with a slot, turned
+ * by a quarter turn to lock a panel on. `angle` turns the slot, so a row
+ * of them doesn't look stamped out. */
+static void draw_fastener(cairo_t *cr, double x, double y, double angle) {
+	circle(cr, x, y, 3.2);
+	set_shading(cr, y - 3.2, y + 3.2, metal_light, metal_dark);
+	cairo_fill_preserve(cr);
+	set_colour(cr, metal_black);
+	cairo_set_line_width(cr, 0.8);
+	cairo_stroke(cr);
+	double dx = 2.3 * cos(angle * DEGREES), dy = 2.3 * sin(angle * DEGREES);
+	cairo_set_line_width(cr, 1.1);
+	line(cr, x - dx, y - dy, x + dx, y + dy);
+}
+
+/* A plate screwed onto the panel. It stands slightly proud, so its top
+ * and left edges catch the light and its bottom and right edges are in
+ * shade: a bevel, drawn as one light and one dark line. A fastener holds
+ * each corner. */
+static void draw_plate(cairo_t *cr, double x, double y, double w, double h) {
+	rounded_rect(cr, x, y, w, h, 4);
+	set_shading(cr, y, y + h, (struct colour){ 0.17, 0.18, 0.20 },
+		(struct colour){ 0.11, 0.115, 0.13 });
+	cairo_fill(cr);
+	cairo_set_line_width(cr, 1);
+	set_colour(cr, metal_mid);
+	cairo_move_to(cr, x + 0.5, y + h - 4);
+	cairo_line_to(cr, x + 0.5, y + 0.5);
+	cairo_line_to(cr, x + w - 4, y + 0.5);
+	cairo_stroke(cr);
+	set_colour(cr, metal_black);
+	cairo_move_to(cr, x + w - 0.5, y + 4);
+	cairo_line_to(cr, x + w - 0.5, y + h - 0.5);
+	cairo_line_to(cr, x + 4, y + h - 0.5);
+	cairo_stroke(cr);
+	for (int i = 0; i < 4; i++) {
+		draw_fastener(cr, i % 2 == 0 ? x + 6 : x + w - 6,
+			i < 2 ? y + 6 : y + h - 6, 25 + 50 * i);
+	}
+}
+
+/* One caution light: a small window that lights amber, with what it is
+ * about written on it. Unlit, the writing is just visible through the
+ * dark glass, as on a real one. */
+static void draw_caution_light(cairo_t *cr, const char *name,
+		double x, double y, double w, double h, bool lit) {
+	rounded_rect(cr, x, y, w, h, 1.5);
+	set_colour(cr, metal_black);
+	cairo_fill(cr);
+	rounded_rect(cr, x + 1.2, y + 1.2, w - 2.4, h - 2.4, 1);
+	if (lit) {
+		cairo_set_source_rgb(cr, CAUTION_AMBER);
+	} else {
+		cairo_set_source_rgb(cr, 0.10, 0.075, 0.03);
+	}
+	cairo_fill(cr);
+	if (lit) {
+		/* A faint glow spilling onto the plate round it. */
+		rounded_rect(cr, x - 1, y - 1, w + 2, h + 2, 2.5);
+		cairo_set_source_rgba(cr, CAUTION_AMBER, 0.25);
+		cairo_set_line_width(cr, 2.5);
+		cairo_stroke(cr);
+		cairo_set_source_rgb(cr, 0.16, 0.08, 0.0);
+	} else {
+		cairo_set_source_rgb(cr, 0.36, 0.27, 0.12);
+	}
+	cairo_set_font_size(cr, FONT_SIZE(6.5));
+	text_centred(cr, name, x + w / 2, y + h / 2);
+}
+
+/* A toggle switch seen from the front: its mounting nut, and the lever
+ * leaning up or down. A guarded switch (one that must not be flipped by
+ * accident) has a red cover hinged above it, lifted open here, and two
+ * red rails either side. `on` and `off` name the two positions. */
+static void draw_toggle(cairo_t *cr, double x, double y, const char *name,
+		const char *on, const char *off, bool up, bool guarded) {
+	cairo_set_source_rgb(cr, PLACARD);
+	cairo_set_font_size(cr, FONT_SIZE(6.5));
+	text_centred(cr, name, x, y - 25);
+	cairo_set_font_size(cr, FONT_SIZE(5));
+	text_centred(cr, on, x + 17, y - 9);
+	text_centred(cr, off, x + 17, y + 9);
+
+	if (guarded) {
+		cairo_set_source_rgb(cr, 0.62, 0.08, 0.06);
+		rounded_rect(cr, x - 8, y - 13, 3, 24, 1);
+		rounded_rect(cr, x + 5, y - 13, 3, 24, 1);
+		rounded_rect(cr, x - 8, y - 17, 16, 4, 1.5); /* the lid, edge-on */
+		cairo_fill(cr);
+		/* Yellow and black stripes on the lid. */
+		cairo_set_source_rgb(cr, 0.95, 0.78, 0.10);
+		for (int i = 0; i < 3; i++) {
+			cairo_rectangle(cr, x - 5.5 + i * 4.5, y - 16.5, 2, 3);
+		}
+		cairo_fill(cr);
+	}
+
+	/* The nut: six-sided, lighter on its upper faces. */
+	cairo_new_path(cr);
+	for (int i = 0; i < 6; i++) {
+		double a = (60 * i + 30) * DEGREES;
+		cairo_line_to(cr, x + 5 * cos(a), y + 5 * sin(a));
+	}
+	cairo_close_path(cr);
+	set_shading(cr, y - 5, y + 5, metal_light, metal_dark);
+	cairo_fill(cr);
+	circle(cr, x, y, 2.4);
+	set_colour(cr, metal_black);
+	cairo_fill(cr);
+
+	/* The lever: a tapering bat with a rounded tip. */
+	double tip = up ? y - 11 : y + 11;
+	cairo_move_to(cr, x - 1.7, y);
+	cairo_line_to(cr, x - 1.1, tip);
+	cairo_line_to(cr, x + 1.1, tip);
+	cairo_line_to(cr, x + 1.7, y);
+	cairo_close_path(cr);
+	set_shading(cr, fmin(y, tip), fmax(y, tip), metal_light, metal_mid);
+	cairo_fill(cr);
+	circle(cr, x, tip, 2);
+	set_colour(cr, metal_light);
+	cairo_fill(cr);
+}
+
+/* The consoles: on a screen too narrow for the dials (16:10, say), the
+ * strip between each side screen and the centre display gets a plate of
+ * caution lights and a plate of switches instead. Returns false if this
+ * screen has the dials, or no room even for this. x and w say where the
+ * left console goes; the right one is its mirror image. */
+static bool console_position(const struct layout *l, double *x, double *w) {
+	double dial_x, dial_y;
+	if (dial_position(l, 0, &dial_x, &dial_y)) {
+		return false;
+	}
+	double left_edge = l->radar_x + SCREEN_SIZE / 2.0 + 11;
+	double gap = (l->data_x - 30) - left_edge;
+	if (gap < 90) {
+		return false;
+	}
+	*w = fmin(gap - 8, 120);
+	*x = left_edge + (gap - *w) / 2;
+	return true;
+}
+
+static void draw_consoles(cairo_t *cr, const struct layout *l) {
+	double x, w;
+	if (!console_position(l, &x, &w)) {
+		return;
+	}
+	/* Two plates per side, level with the side screens' glass. */
+	double top = l->scope_y - SCREEN_SIZE / 2.0 - 8;
+	double bottom = l->scope_y + SCREEN_SIZE / 2.0 + 8;
+	double split = top + 88;
+
+	for (int side = 0; side < 2; side++) {
+		double px = side == 0 ? x : l->width - x - w;
+		draw_plate(cr, px, top, w, split - top);
+		draw_plate(cr, px, split + 6, w, bottom - split - 6);
+
+		cairo_set_source_rgb(cr, PLACARD);
+		cairo_set_font_size(cr, FONT_SIZE(6));
+		if (side == 0) {
+			/* Left: the caution panel, two columns of four. One
+			 * light is on, as there usually is one on somewhere. */
+			static const char *const names[8] = {
+				"ENG", "HYD", "FUEL", "OXY",
+				"GEN", "ECS", "FLCS", "BRK",
+			};
+			text_centred(cr, "CAUTION", px + w / 2, top + 10);
+			double cell_w = (w - 20) / 2, cell_h = 13;
+			for (int i = 0; i < 8; i++) {
+				double cx = px + 8 + (i % 2) * (cell_w + 4);
+				double cy = top + 19 + (i / 2) * (cell_h + 3);
+				draw_caution_light(cr, names[i], cx, cy,
+					cell_w, cell_h, i == 5);
+			}
+		} else {
+			/* Right: the master warning and master caution lights,
+			 * the two that light first whatever the trouble, and
+			 * below them the three landing gear lights (dark: the
+			 * gear is up). */
+			text_centred(cr, "MASTER", px + w / 2, top + 10);
+			double light_w = (w - 20) / 2;
+			draw_caution_light(cr, "WARN", px + 8, top + 18,
+				light_w, 24, false);
+			draw_caution_light(cr, "CAUTION", px + 12 + light_w,
+				top + 18, light_w, 24, true);
+			/* The warning light is red, not amber, when unlit too. */
+			rounded_rect(cr, px + 9.2, top + 19.2, light_w - 2.4, 21.6, 1);
+			cairo_set_source_rgba(cr, 0.5, 0.0, 0.0, 0.35);
+			cairo_fill(cr);
+			cairo_set_source_rgb(cr, PLACARD);
+			text_centred(cr, "GEAR", px + w / 2, top + 53);
+			static const char *const wheels[3] = { "L", "N", "R" };
+			for (int i = 0; i < 3; i++) {
+				double gx = px + w / 2 + (i - 1) * 22, gy = top + 70;
+				circle(cr, gx, gy, 6.5);
+				set_colour(cr, metal_black);
+				cairo_fill(cr);
+				circle(cr, gx, gy, 5);
+				cairo_set_source_rgb(cr, HUD_FAINT);
+				cairo_fill(cr);
+				cairo_set_source_rgba(cr, 1, 1, 1, 0.25);
+				circle(cr, gx - 1.5, gy - 1.5, 1.4); /* a glint */
+				cairo_fill(cr);
+				cairo_set_source_rgb(cr, PLACARD);
+				cairo_set_font_size(cr, FONT_SIZE(5));
+				text_centred(cr, wheels[i], gx, gy + 11.5);
+				cairo_set_font_size(cr, FONT_SIZE(6));
+			}
+		}
+
+		/* The switch plate: two toggles. */
+		double sy = split + 6 + (bottom - split - 6) / 2 + 9;
+		double s1 = px + w / 2 - w / 4, s2 = px + w / 2 + w / 4;
+		if (side == 0) {
+			draw_toggle(cr, s1, sy, "MASTER ARM", "ARM", "SAFE", false, true);
+			draw_toggle(cr, s2, sy, "RDR ALT", "ON", "OFF", true, false);
+		} else {
+			draw_toggle(cr, s1, sy, "ANTI-COLL", "ON", "OFF", true, false);
+			draw_toggle(cr, s2, sy, "POSITION", "ON", "OFF", true, false);
+		}
+	}
+}
+
+/* The ejection seat's handle, between your knees: a loop striped yellow
+ * and black so it can be found without looking. Only the top of it shows
+ * above the dock, under the centre display. */
+static void draw_ejection_handle(cairo_t *cr, const struct layout *l) {
+	double x = l->cx - 34, y = l->panel_bottom - 11, w = 68, h = 24;
+	/* The loop is a ring: the outer rounded rectangle minus the inner
+	 * one ("even-odd" fills only the area between them). Clip to it,
+	 * then paint it yellow and lay black stripes across. */
+	cairo_save(cr);
+	cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+	rounded_rect(cr, x, y, w, h, 7);
+	rounded_rect(cr, x + 6, y + 6, w - 12, h - 12, 3);
+	cairo_clip_preserve(cr);
+	cairo_set_source_rgb(cr, 0.95, 0.78, 0.10);
+	cairo_fill(cr);
+	cairo_set_source_rgb(cr, 0.06, 0.06, 0.05);
+	for (double sx = x - h; sx < x + w; sx += 9) {
+		cairo_move_to(cr, sx, y + h);
+		cairo_line_to(cr, sx + h, y);
+		cairo_line_to(cr, sx + h + 4.5, y);
+		cairo_line_to(cr, sx + 4.5, y + h);
+		cairo_close_path(cr);
+	}
+	cairo_fill(cr);
+	/* Light the top and shade the rest (the loop is round in section):
+	 * paint fills the whole clip, here the ring. */
+	set_shading(cr, y, y + 6, (struct colour){ 1, 1, 1 }, (struct colour){ 0, 0, 0 });
+	cairo_paint_with_alpha(cr, 0.18);
+	cairo_restore(cr);
+	cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING);
+	rounded_rect(cr, x, y, w, h, 7);
+	set_colour(cr, metal_black);
+	cairo_set_line_width(cr, 1);
+	cairo_stroke(cr);
+}
+
 static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 	struct layout l = layout_for(scene);
 	double w = l.width, h = DESIGN_HEIGHT;
@@ -1127,6 +1399,19 @@ static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 				draw_gauge_face(cr, gauge_names[i], dial_x, dial_y);
 			}
 		}
+	} else {
+		draw_consoles(cr, &l);
+	}
+
+	/* The panel's outer sections are held on by a column of fasteners
+	 * down each edge, outside the side screens. */
+	for (int i = 0; ; i++) {
+		double y = l.panel_top + 62 + i * 46;
+		if (y > l.panel_bottom - 8) {
+			break;
+		}
+		draw_fastener(cr, 19, y, 20 + 35 * i);
+		draw_fastener(cr, w - 19, y, 70 + 35 * i);
 	}
 
 	draw_screen(cr, "RADAR", l.radar_x, l.scope_y, false);
@@ -1168,6 +1453,8 @@ static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 		circle(cr, x, y, 3);
 		cairo_fill(cr);
 	}
+
+	draw_ejection_handle(cr, &l);
 
 	/* The hood's shadow, last, so it falls across everything on the panel:
 	 * darkest right under the hood, gone 40 units below it. A blurred
