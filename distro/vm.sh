@@ -11,8 +11,8 @@
 #   distro/vm.sh destroy       delete the VM's disk (keeps the download)
 #
 # `start` opens a window if this terminal has a display; HEADLESS=1 stops
-# that. SCREEN=WIDTHxHEIGHT picks the VM's screen size (default 1280x800,
-# the shape of a 16:10 laptop). The cockpit fits itself to the shape:
+# that. SCREEN=WIDTHxHEIGHT picks the VM's screen size (default 1920x1080,
+# 16:9, where the cockpit shows its dials). It fits itself to the shape:
 #   SCREEN=1280x800  distro/vm.sh start   # 16:10: caution panels, switches
 #   SCREEN=1920x1080 distro/vm.sh start   # 16:9: dials and gauges
 #   SCREEN=1024x768  distro/vm.sh start   # 4:3: the CI tests' screen
@@ -118,7 +118,7 @@ running() {
 start() {
 	[ -e "$VM/disk.qcow2" ] || { echo "No VM yet. Run: distro/vm.sh create"; exit 1; }
 	running && { echo "Already running."; return; }
-	local screen=${SCREEN:-1280x800}
+	local screen=${SCREEN:-1920x1080}
 	case "$screen" in
 	[0-9]*x[0-9]*) ;;
 	*) echo "SCREEN must look like 1920x1080, not '$screen'"; exit 1 ;;
