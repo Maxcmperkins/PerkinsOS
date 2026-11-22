@@ -19,10 +19,10 @@
 # The window scales the screen to fit, so a big one still fits on yours.
 # GPU=1 gives the VM a graphics card that runs OpenGL on this machine's
 # GPU, and the desktop draws with it instead of the CPU (docs/ROADMAP.md,
-# M2). It needs the window, so not with HEADLESS=1. Two limits for now:
-# the VM's screen follows the window's size, and starts at 640x480 because
-# the compositor only reads the size once, when it starts; and `shot`
-# gives a black picture, as QEMU cannot read back a GL screen.
+# M2). It needs the window, so not with HEADLESS=1. In this mode QEMU
+# sizes the VM's screen to its window instead of to SCREEN: it starts at
+# 640x480, and dragging the window bigger makes the desktop follow. Also,
+# `shot` gives a black picture: QEMU cannot read back a GL screen.
 # Stop the VM first to change either: they are set when QEMU starts. The user in the VM is "max", password "perkinsos" (VM_PASSWORD
 # below); sudo needs no password. After `install`, the VM logs max in to
 # the desktop by itself when it boots; quit the desktop (Alt+Escape) to

@@ -9,6 +9,8 @@
 #include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
+#include <wlr/backend/drm.h>
+#include <wlr/backend/session.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_cursor.h>
@@ -27,6 +29,7 @@
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
+#include <xf86drmMode.h> /* PerkinsOS: reading a screen's modes */
 #include <xkbcommon/xkbcommon.h>
 
 /*
@@ -71,6 +74,11 @@ enum titlebar_part {
 struct tinywl_server {
 	struct wl_display *wl_display;
 	struct wlr_backend *backend;
+	/* PerkinsOS: the login session wlroots opened the hardware through
+	 * (NULL when nested in another desktop), and the graphics cards in
+	 * it we watch for screens changing size (tinywl_gpu). */
+	struct wlr_session *session;
+	struct wl_list gpus;
 	struct wlr_renderer *renderer;
 	struct wlr_allocator *allocator;
 	struct wlr_scene *scene;
@@ -138,10 +146,21 @@ struct tinywl_server {
 	struct wl_listener new_output;
 };
 
+/* PerkinsOS: a graphics card, watched for "hotplug" events: a screen
+ * plugged in or out, or one whose modes changed. */
+struct tinywl_gpu {
+	struct wl_list link; /* tinywl_server.gpus */
+	struct tinywl_server *server;
+	struct wl_listener change;
+	struct wl_listener remove;
+};
+
 struct tinywl_output {
 	struct wl_list link;
 	struct tinywl_server *server;
 	struct wlr_output *wlr_output;
+	/* PerkinsOS: every commit to this screen, to catch a new size. */
+	struct wl_listener commit;
 	/* PerkinsOS: a filled rectangle the size of this screen. */
 	struct wlr_scene_rect *wallpaper;
 	/* PerkinsOS: the layer surfaces shown on this screen, and the part of
@@ -1033,6 +1052,7 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->frame.link);
 	wl_list_remove(&output->request_state.link);
 	wl_list_remove(&output->destroy.link);
+	wl_list_remove(&output->commit.link);
 	wl_list_remove(&output->link);
 	/* PerkinsOS: the wallpaper rectangle goes with its screen. */
 	wlr_scene_node_destroy(&output->wallpaper->node);
@@ -1084,6 +1104,161 @@ static void arrange_layers(struct tinywl_output *output) {
 		}
 	}
 	output->usable_area = usable_area;
+}
+
+/* PerkinsOS: place a maximized window over the part of the first screen
+ * the dock leaves free. Our title bar sits above the window, so the
+ * window starts that much lower and is that much shorter. Used when a
+ * window is maximized, and again when the screen changes size. */
+static void toplevel_fill_usable_area(struct tinywl_toplevel *toplevel) {
+	struct tinywl_server *server = toplevel->server;
+	if (wl_list_empty(&server->outputs)) {
+		return;
+	}
+	struct tinywl_output *output =
+		wl_container_of(server->outputs.next, output, link);
+	const int th = toplevel_titlebar_height(toplevel);
+	wlr_scene_node_set_position(&toplevel->scene_tree->node,
+		output->usable_area.x, output->usable_area.y + th);
+	wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
+		output->usable_area.width, output->usable_area.height - th);
+}
+
+/* PerkinsOS: a screen changed. If its size did (a new mode, scale or
+ * rotation), everything sized to it follows: the wallpaper rectangle,
+ * the layer surfaces (arrange_layers() sends the cockpit and the dock
+ * their new size, and they redraw), and maximized windows. */
+static void output_commit(struct wl_listener *listener, void *data) {
+	struct tinywl_output *output = wl_container_of(listener, output, commit);
+	const struct wlr_output_event_commit *event = data;
+	if (!(event->state->committed & (WLR_OUTPUT_STATE_MODE |
+			WLR_OUTPUT_STATE_SCALE | WLR_OUTPUT_STATE_TRANSFORM))) {
+		return;
+	}
+	int width, height;
+	wlr_output_effective_resolution(output->wlr_output, &width, &height);
+	wlr_scene_rect_set_size(output->wallpaper, width, height);
+	arrange_layers(output);
+	struct tinywl_toplevel *toplevel;
+	wl_list_for_each(toplevel, &output->server->toplevels, link) {
+		if (toplevel->maximized) {
+			toplevel_fill_usable_area(toplevel);
+		}
+	}
+}
+
+/* PerkinsOS: switch a screen to its preferred mode, if that changed
+ * since we set it. In a VM this is how the screen follows QEMU's window:
+ * resizing the window makes the virtual card report a new preferred
+ * mode and send a hotplug event. A real monitor changing its preferred
+ * mode while plugged in is rare, so there this does nothing.
+ *
+ * wlroots reads a screen's list of modes only when it is plugged in, so
+ * we ask the kernel ourselves (drmModeGetConnector re-reads them) and
+ * hand the new mode to wlroots as a "custom" one. */
+static void output_follow_preferred_mode(struct tinywl_output *output) {
+	struct wlr_output *wlr_output = output->wlr_output;
+	if (!wlr_output_is_drm(wlr_output) || !wlr_output->enabled) {
+		return;
+	}
+	int fd = wlr_backend_get_drm_fd(wlr_output->backend);
+	drmModeConnector *connector = drmModeGetConnector(fd,
+		wlr_drm_connector_get_id(wlr_output));
+	if (connector == NULL) {
+		return;
+	}
+	drmModeModeInfo preferred;
+	bool found = false;
+	for (int i = 0; i < connector->count_modes; i++) {
+		if (connector->modes[i].type & DRM_MODE_TYPE_PREFERRED) {
+			preferred = connector->modes[i];
+			found = true;
+			break;
+		}
+	}
+	drmModeFreeConnector(connector);
+	if (!found || (preferred.hdisplay == wlr_output->width &&
+			preferred.vdisplay == wlr_output->height)) {
+		return;
+	}
+	/* wlroots only takes modes marked as made up by the user. */
+	preferred.type = DRM_MODE_TYPE_USERDEF;
+	struct wlr_output_mode *mode =
+		wlr_drm_connector_add_mode(wlr_output, &preferred);
+	if (mode == NULL) {
+		return;
+	}
+	wlr_log(WLR_INFO, "%s: preferred mode is now %dx%d, switching",
+		wlr_output->name, mode->width, mode->height);
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_mode(&state, mode);
+	wlr_output_commit_state(wlr_output, &state); /* runs output_commit() */
+	wlr_output_state_finish(&state);
+}
+
+/* PerkinsOS: a graphics card's hotplug event. wlroots handles screens
+ * being plugged in and out itself (server_new_output(), output_destroy());
+ * what it leaves to us is a screen that stays plugged in but changes its
+ * preferred mode. */
+static void gpu_change(struct wl_listener *listener, void *data) {
+	struct tinywl_gpu *gpu = wl_container_of(listener, gpu, change);
+	const struct wlr_device_change_event *event = data;
+	if (event->type != WLR_DEVICE_HOTPLUG) {
+		return;
+	}
+	struct tinywl_output *output;
+	wl_list_for_each(output, &gpu->server->outputs, link) {
+		output_follow_preferred_mode(output);
+	}
+}
+
+static void gpu_forget(struct tinywl_gpu *gpu) {
+	wl_list_remove(&gpu->change.link);
+	wl_list_remove(&gpu->remove.link);
+	wl_list_remove(&gpu->link);
+	free(gpu);
+}
+
+static void gpu_remove(struct wl_listener *listener, void *data) {
+	struct tinywl_gpu *gpu = wl_container_of(listener, gpu, remove);
+	gpu_forget(gpu);
+}
+
+/* PerkinsOS: watch every graphics card the session has open. Call after
+ * wlr_backend_autocreate(), which opens them, and before
+ * wlr_backend_start(), which opens the input devices too: only cards
+ * are in the list then.
+ *
+ * wlroots closes a card's file when the card goes away or the backend
+ * is destroyed, and it asserts that nothing is listening for that card's
+ * changes by then. So server_forget_gpus() must run before
+ * wlr_backend_destroy(), and our "remove" listener must run before the
+ * DRM backend's (which closes the file). wl_signal_add() would put ours
+ * last, so it goes at the head of the list instead. */
+static void server_watch_gpus(struct tinywl_server *server) {
+	wl_list_init(&server->gpus);
+	if (server->session == NULL) {
+		return; /* nested in another desktop: no cards of our own */
+	}
+	struct wlr_device *device;
+	wl_list_for_each(device, &server->session->devices, link) {
+		struct tinywl_gpu *gpu = calloc(1, sizeof(*gpu));
+		gpu->server = server;
+		gpu->change.notify = gpu_change;
+		wl_signal_add(&device->events.change, &gpu->change);
+		gpu->remove.notify = gpu_remove;
+		wl_list_insert(&device->events.remove.listener_list,
+			&gpu->remove.link);
+		wl_list_insert(&server->gpus, &gpu->link);
+	}
+}
+
+static void server_forget_gpus(struct tinywl_server *server) {
+	struct tinywl_gpu *gpu, *tmp;
+	wl_list_for_each_safe(gpu, tmp, &server->gpus, link) {
+		gpu_forget(gpu);
+	}
 }
 
 static void layer_surface_commit(struct wl_listener *listener, void *data) {
@@ -1285,6 +1460,12 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	/* PerkinsOS: no layer surfaces yet, so this just sets usable_area to
 	 * the whole screen. */
 	arrange_layers(output);
+
+	/* PerkinsOS: follow changes of size. Added after the output layout's
+	 * own listener (in wlr_output_layout_add_auto()), so by the time ours
+	 * runs the layout already knows the new size. */
+	output->commit.notify = output_commit;
+	wl_signal_add(&wlr_output->events.commit, &output->commit);
 }
 
 /* PerkinsOS: maximize or restore a window. Maximized means filling the
@@ -1301,20 +1482,12 @@ static void toplevel_set_maximized(struct tinywl_toplevel *toplevel,
 	}
 	struct wlr_scene_node *node = &toplevel->scene_tree->node;
 	if (maximize) {
-		struct tinywl_output *output =
-			wl_container_of(server->outputs.next, output, link);
 		/* Remember where the window was so un-maximizing can put it back. */
 		toplevel->restore.x = node->x;
 		toplevel->restore.y = node->y;
 		toplevel->restore.width = xdg_toplevel->base->geometry.width;
 		toplevel->restore.height = xdg_toplevel->base->geometry.height;
-		/* PerkinsOS: our title bar sits above the window, so the
-		 * window starts that much lower and is that much shorter. */
-		const int th = toplevel_titlebar_height(toplevel);
-		wlr_scene_node_set_position(node,
-			output->usable_area.x, output->usable_area.y + th);
-		wlr_xdg_toplevel_set_size(xdg_toplevel,
-			output->usable_area.width, output->usable_area.height - th);
+		toplevel_fill_usable_area(toplevel);
 	} else {
 		/* A restore size of 0x0 (the window was never un-maximized before)
 		 * means "client, pick your own size". */
@@ -1750,11 +1923,14 @@ int main(int argc, char *argv[]) {
 	 * output hardware. The autocreate option will choose the most suitable
 	 * backend based on the current environment, such as opening an X11 window
 	 * if an X11 server is running. */
-	server.backend = wlr_backend_autocreate(wl_display_get_event_loop(server.wl_display), NULL);
+	/* PerkinsOS: keep the session (stock TinyWL passes NULL here). */
+	server.backend = wlr_backend_autocreate(
+		wl_display_get_event_loop(server.wl_display), &server.session);
 	if (server.backend == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_backend");
 		return 1;
 	}
+	server_watch_gpus(&server);
 
 	/* Autocreates a renderer, either Pixman, GLES2 or Vulkan for us. The user
 	 * can also specify a renderer using the WLR_RENDERER env var.
@@ -1905,6 +2081,7 @@ int main(int argc, char *argv[]) {
 	/* Add a Unix socket to the Wayland display. */
 	const char *socket = wl_display_add_socket_auto(server.wl_display);
 	if (!socket) {
+		server_forget_gpus(&server);
 		wlr_backend_destroy(server.backend);
 		return 1;
 	}
@@ -1912,6 +2089,7 @@ int main(int argc, char *argv[]) {
 	/* Start the backend. This will enumerate outputs and inputs, become the DRM
 	 * master, etc */
 	if (!wlr_backend_start(server.backend)) {
+		server_forget_gpus(&server);
 		wlr_backend_destroy(server.backend);
 		wl_display_destroy(server.wl_display);
 		return 1;
@@ -1960,6 +2138,7 @@ int main(int argc, char *argv[]) {
 	wlr_cursor_destroy(server.cursor);
 	wlr_allocator_destroy(server.allocator);
 	wlr_renderer_destroy(server.renderer);
+	server_forget_gpus(&server);
 	wlr_backend_destroy(server.backend);
 	wl_display_destroy(server.wl_display);
 	return 0;
