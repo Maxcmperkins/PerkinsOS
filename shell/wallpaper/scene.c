@@ -659,11 +659,13 @@ static int key_at(const struct layout *l, double x, double y) {
  *
  * Round gauges in the spaces either side of the centre panel, each showing
  * one real figure about the machine. The face (ring, ticks, name) is part
- * of the cached cockpit; only the needle is drawn each frame. They only
- * appear on a wide screen: on a 4:3 screen there is no room.
+ * of the cached cockpit; only the needle is drawn each frame. They grow
+ * with the space they have: full size on a 16:9 screen, smaller on 16:10,
+ * and gone on 4:3, where there is no room.
  */
 #define DIAL_COUNT 4
-#define DIAL_RADIUS 46
+#define DIAL_RADIUS 46      /* full size */
+#define DIAL_RADIUS_MIN 30  /* any smaller and the numbers can't be read */
 
 struct dial {
 	const char *name;
@@ -678,18 +680,30 @@ static const struct dial dials[DIAL_COUNT] = {
 	{ "TASKS", 40, "40" },
 };
 
+/* The dials' radius on this screen: as big as the strip between a side
+ * screen and the centre display allows (keeping 20 units clear each side),
+ * up to full size. 0 if even the smallest dial would not fit. */
+static double dial_radius(const struct layout *l) {
+	double left_edge = l->radar_x + SCREEN_SIZE / 2.0 + 11;
+	double gap = (l->data_x - 30) - left_edge;
+	double radius = fmin(DIAL_RADIUS, (gap - 40) / 2);
+	return radius < DIAL_RADIUS_MIN ? 0 : radius;
+}
+
 /* Centre of dial `index`, or false if this screen has no room for dials.
  * Dials 0 and 1 are stacked left of the centre panel, 2 and 3 right. */
 static bool dial_position(const struct layout *l, int index,
 		double *x, double *y) {
-	double left_edge = l->radar_x + SCREEN_SIZE / 2.0 + 11;
-	double gap = (l->data_x - 30) - left_edge;
-	if (gap < 2 * DIAL_RADIUS + 40) {
+	double radius = dial_radius(l);
+	if (radius == 0) {
 		return false;
 	}
+	double left_edge = l->radar_x + SCREEN_SIZE / 2.0 + 11;
+	double gap = (l->data_x - 30) - left_edge;
 	double offset = left_edge + gap / 2;
 	*x = index < 2 ? offset : l->width - offset;
-	*y = l->scope_y + (index % 2 == 0 ? -54 : 56);
+	/* One above the other, either side of the scopes' centre line. */
+	*y = l->scope_y + (index % 2 == 0 ? -(radius + 8) : radius + 10);
 	return true;
 }
 
@@ -702,12 +716,15 @@ static double dial_bearing(double fraction) {
 }
 
 static void draw_dial_face(cairo_t *cr, const struct dial *dial,
-		double x, double y) {
+		double x, double y, double r) {
+	/* Text shrinks with the dial, but less, so it stays readable. */
+	double text_scale = 0.4 + 0.6 * r / DIAL_RADIUS;
+
 	/* Bezel ring, then the black face. */
-	circle(cr, x, y, DIAL_RADIUS + 5);
-	set_shading(cr, y - DIAL_RADIUS - 5, y + DIAL_RADIUS + 5, metal_light, metal_dark);
+	circle(cr, x, y, r + 5);
+	set_shading(cr, y - r - 5, y + r + 5, metal_light, metal_dark);
 	cairo_fill(cr);
-	circle(cr, x, y, DIAL_RADIUS);
+	circle(cr, x, y, r);
 	set_colour(cr, glass_black);
 	cairo_fill(cr);
 
@@ -717,25 +734,26 @@ static void draw_dial_face(cairo_t *cr, const struct dial *dial,
 	cairo_set_line_width(cr, 1.2);
 	for (int i = 0; i <= 10; i++) {
 		double x1, y1, x2, y2;
-		polar(x, y, dial_bearing(i / 10.0), DIAL_RADIUS - (i % 2 == 0 ? 9 : 5), &x1, &y1);
-		polar(x, y, dial_bearing(i / 10.0), DIAL_RADIUS - 2, &x2, &y2);
+		polar(x, y, dial_bearing(i / 10.0), r - (i % 2 == 0 ? 9 : 5), &x1, &y1);
+		polar(x, y, dial_bearing(i / 10.0), r - 2, &x2, &y2);
 		line(cr, x1, y1, x2, y2);
 	}
 	cairo_new_sub_path(cr);
-	cairo_arc(cr, x, y, DIAL_RADIUS - 3, (dial_bearing(0.8) - 90) * DEGREES,
+	cairo_arc(cr, x, y, r - 3, (dial_bearing(0.8) - 90) * DEGREES,
 		(dial_bearing(1.0) - 90) * DEGREES);
 	cairo_set_line_width(cr, 3);
 	cairo_stroke(cr);
 
-	cairo_set_font_size(cr, FONT_SIZE(9));
+	cairo_set_font_size(cr, FONT_SIZE(9 * text_scale));
 	cairo_set_source_rgb(cr, HUD_DIM);
 	double tx, ty;
-	polar(x, y, dial_bearing(0), DIAL_RADIUS - 17, &tx, &ty);
+	polar(x, y, dial_bearing(0), r - 8 - 9 * text_scale, &tx, &ty);
 	text_centred(cr, "0", tx, ty);
-	polar(x, y, dial_bearing(1), DIAL_RADIUS - 18, &tx, &ty);
+	polar(x, y, dial_bearing(1), r - 8 - 10 * text_scale, &tx, &ty);
 	text_centred(cr, dial->top, tx, ty);
 	cairo_set_source_rgb(cr, HUD_GREEN);
-	text_centred(cr, dial->name, x, y + DIAL_RADIUS * 0.52);
+	/* In the gap at the bottom of the scale, clear of the end numbers. */
+	text_centred(cr, dial->name, x, y + r * 0.62);
 }
 
 static void draw_dial_needles(struct scene *scene, cairo_t *cr,
@@ -745,13 +763,14 @@ static void draw_dial_needles(struct scene *scene, cairo_t *cr,
 		list->cpu_fraction * 100, list->memory_fraction * 100,
 		list->load_average, list->count,
 	};
+	double r = dial_radius(l);
 	for (int i = 0; i < DIAL_COUNT; i++) {
 		double x, y, tip_x, tip_y;
 		if (!dial_position(l, i, &x, &y)) {
 			return;
 		}
 		polar(x, y, dial_bearing(values[i] / dials[i].full_scale),
-			DIAL_RADIUS - 11, &tip_x, &tip_y);
+			r - 11, &tip_x, &tip_y);
 		cairo_set_source_rgb(cr, 0.92, 0.94, 0.96); /* a white needle */
 		cairo_set_line_width(cr, 2);
 		line(cr, x, y, tip_x, tip_y);
@@ -1074,7 +1093,7 @@ static void draw_toggle(cairo_t *cr, double x, double y, const char *name,
 	cairo_fill(cr);
 }
 
-/* The consoles: on a screen too narrow for the dials (16:10, say), the
+/* The consoles: on a screen too narrow for even small dials, the
  * strip between each side screen and the centre display gets a plate of
  * caution lights and a plate of switches instead. Returns false if this
  * screen has the dials, or no room even for this. x and w say where the
@@ -1392,7 +1411,7 @@ static void draw_cockpit(struct scene *scene, cairo_t *cr) {
 		}
 		for (int i = 0; i < DIAL_COUNT; i++) {
 			dial_position(&l, i, &dial_x, &dial_y);
-			draw_dial_face(cr, &dials[i], dial_x, dial_y);
+			draw_dial_face(cr, &dials[i], dial_x, dial_y, dial_radius(&l));
 		}
 		for (int i = 0; i < GAUGE_COUNT; i++) {
 			if (gauge_position(&l, i, &dial_x, &dial_y)) {
