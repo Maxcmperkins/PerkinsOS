@@ -7,10 +7,34 @@
 # the things that script does by hand (XDG_RUNTIME_DIR, the locale, and
 # permission to use the screen and input devices).
 
-# Draw on the CPU, as the Buildroot image does (see its
-# /etc/profile.d/perkinsos.sh). Set WLR_RENDERER=gles2 before running this
-# to try the graphics card instead.
-export WLR_RENDERER="${WLR_RENDERER:-pixman}"
+# Is there a graphics card that runs OpenGL itself? Every card with a
+# "render node" (/dev/dri/renderD*, what programs open to use OpenGL)
+# offers it, but a VM's plain virtio card only fakes it on the CPU
+# (Mesa's llvmpipe), which is slower than drawing with pixman. A virtio
+# card says whether it has the real thing, virgl (distro/vm.sh GPU=1),
+# in its feature bits: a string of 0s and 1s in sysfs, the first one
+# being VIRTIO_GPU_F_VIRGL. Any other card (a laptop's) is a real GPU.
+has_gpu() {
+	for node in /sys/class/drm/renderD*; do
+		[ -e "$node" ] || continue
+		case "$(cat "$node"/device/virtio*/features 2> /dev/null)" in
+		"") return 0 ;; # not virtio: a real GPU
+		1*) return 0 ;; # virtio with virgl
+		esac
+	done
+	return 1
+}
+
+# Draw with the graphics card if it can; otherwise on the CPU (pixman),
+# as the Buildroot image does. Set WLR_RENDERER=pixman or =gles2 before
+# running this to choose.
+if [ -z "${WLR_RENDERER:-}" ]; then
+	if has_gpu; then
+		export WLR_RENDERER=gles2
+	else
+		export WLR_RENDERER=pixman
+	fi
+fi
 # Draw the cursor into the frame, so it shows in QEMU screenshots.
 export WLR_NO_HARDWARE_CURSORS=1
 # Ask toolkits to use Wayland rather than look for an X11 server.

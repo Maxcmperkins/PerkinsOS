@@ -62,6 +62,8 @@ The biggest technical change. Today wlroots' pixman renderer draws every frame o
 
 **Done when:** the desktop runs at the screen's refresh rate in the VM with the graphics card, and the Buildroot tests still pass on the CPU.
 
+**Status (22 Nov 2026), first step:** `GPU=1 distro/vm.sh start` gives the VM a virgl card (`virtio-vga-gl`), and `perkinsos-start` picks wlroots' GLES renderer whenever there is a real GPU: a render node that is not a VM's plain virtio card (that one only offers OpenGL on the CPU, slower than pixman). Tested in the VM: with `GPU=1` the compositor runs on GLES through virgl; without it, on pixman as before. Still to do: the VM's screen follows the QEMU window's size in GPU mode and starts at 640x480, because the compositor picks the screen's mode once, at start (handling a mode change is compositor work, and also what "resize the window to change the screen size" needs); screenshots of a GL screen come out black; and none of it is measured yet, because without KVM the VM's CPU is emulated and that, not drawing, is the bottleneck.
+
 ### M3. A proper session (M)
 
 The services every desktop app assumes are there.

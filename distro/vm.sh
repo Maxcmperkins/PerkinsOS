@@ -17,7 +17,13 @@
 #   SCREEN=1920x1080 distro/vm.sh start   # 16:9: dials and gauges
 #   SCREEN=1024x768  distro/vm.sh start   # 4:3: the CI tests' screen
 # The window scales the screen to fit, so a big one still fits on yours.
-# Stop the VM first to change it: the size is set when QEMU starts. The user in the VM is "max", password "perkinsos" (VM_PASSWORD
+# GPU=1 gives the VM a graphics card that runs OpenGL on this machine's
+# GPU, and the desktop draws with it instead of the CPU (docs/ROADMAP.md,
+# M2). It needs the window, so not with HEADLESS=1. Two limits for now:
+# the VM's screen follows the window's size, and starts at 640x480 because
+# the compositor only reads the size once, when it starts; and `shot`
+# gives a black picture, as QEMU cannot read back a GL screen.
+# Stop the VM first to change either: they are set when QEMU starts. The user in the VM is "max", password "perkinsos" (VM_PASSWORD
 # below); sudo needs no password. After `install`, the VM logs max in to
 # the desktop by itself when it boots; quit the desktop (Alt+Escape) to
 # see the login screen. It is a throwaway test VM, reachable only from
@@ -135,6 +141,22 @@ start() {
 		display=gtk,zoom-to-fit=on
 		[ -n "${PULSE_SERVER:-}" ] && audio="pa,server=$PULSE_SERVER"
 	fi
+	# The graphics card. virtio-vga only shows a picture the VM drew on
+	# its CPU. virtio-vga-gl also runs the VM's OpenGL: Mesa in the VM
+	# turns GL calls into commands for QEMU, and QEMU's virgl replays them
+	# with this machine's GL (on WSL, WSLg's, which runs on the Windows
+	# GPU driver). QEMU gets that GL from its window (gl=on), so no window,
+	# no GPU. Inside the VM the card shows up as a "render node",
+	# /dev/dri/renderD128, which is what perkinsos-start looks for.
+	vga=virtio-vga
+	if [ -n "${GPU:-}" ]; then
+		if [ "$display" = none ]; then
+			echo "GPU=1 needs a window, so it can't be used headless."
+			exit 1
+		fi
+		vga=virtio-vga-gl
+		display=gtk,gl=on,zoom-to-fit=on
+	fi
 	# On the first boot only, hand cloud-init its settings: it fetches them
 	# from a tiny web server on this machine (10.0.2.2 is "the host" as seen
 	# from inside the VM).
@@ -163,7 +185,7 @@ start() {
 		-drive file="$VM/disk.qcow2",if=virtio \
 		-netdev user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22 \
 		-device virtio-net-pci,netdev=net0 \
-		-device virtio-vga,xres="${screen%x*}",yres="${screen#*x}" \
+		-device $vga,xres="${screen%x*}",yres="${screen#*x}" \
 		-device virtio-keyboard-pci -device virtio-tablet-pci \
 		-audiodev "$audio",id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 \
 		-display $display -serial file:"$VM/serial.log" \

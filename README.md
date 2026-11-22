@@ -90,7 +90,7 @@ The same `compositor/` and `shell/` also build on Ubuntu 26.04, where apps come 
 
 ```sh
 distro/vm.sh create    # once: make a test VM from Ubuntu's cloud image
-distro/vm.sh start     # boot it; a window opens (SCREEN=1920x1080 for another size)
+distro/vm.sh start     # boot it; a window opens (SCREEN=1920x1080 for another size, GPU=1 to draw on the GPU)
 distro/vm.sh install   # copy this repo in, build the package, install it
 distro/vm.sh ssh PerkinsOS/distro/apps.sh       # a file manager, VS Code, Discord, Blender, Inkscape, OBS, ...
 distro/vm.sh ssh PerkinsOS/distro/apps.sh pin   # put the main ones on the dock
