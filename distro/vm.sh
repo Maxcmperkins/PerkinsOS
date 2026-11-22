@@ -11,7 +11,13 @@
 #   distro/vm.sh destroy       delete the VM's disk (keeps the download)
 #
 # `start` opens a window if this terminal has a display; HEADLESS=1 stops
-# that. The user in the VM is "max", password "perkinsos" (VM_PASSWORD
+# that. SCREEN=WIDTHxHEIGHT picks the VM's screen size (default 1280x800,
+# the shape of a 16:10 laptop). The cockpit fits itself to the shape:
+#   SCREEN=1280x800  distro/vm.sh start   # 16:10: caution panels, switches
+#   SCREEN=1920x1080 distro/vm.sh start   # 16:9: dials and gauges
+#   SCREEN=1024x768  distro/vm.sh start   # 4:3: the CI tests' screen
+# The window scales the screen to fit, so a big one still fits on yours.
+# Stop the VM first to change it: the size is set when QEMU starts. The user in the VM is "max", password "perkinsos" (VM_PASSWORD
 # below); sudo needs no password. After `install`, the VM logs max in to
 # the desktop by itself when it boots; quit the desktop (Alt+Escape) to
 # see the login screen. It is a throwaway test VM, reachable only from
@@ -106,6 +112,11 @@ running() {
 start() {
 	[ -e "$VM/disk.qcow2" ] || { echo "No VM yet. Run: distro/vm.sh create"; exit 1; }
 	running && { echo "Already running."; return; }
+	local screen=${SCREEN:-1280x800}
+	case "$screen" in
+	[0-9]*x[0-9]*) ;;
+	*) echo "SCREEN must look like 1920x1080, not '$screen'"; exit 1 ;;
+	esac
 
 	# KVM runs the VM on the real CPU. Without it QEMU emulates the CPU in
 	# software, which works but is many times slower.
@@ -147,11 +158,12 @@ start() {
 	# setsid: run QEMU in a session of its own. Otherwise it is shut down
 	# (by a "hang up" signal) when the terminal that started it closes.
 	# shellcheck disable=SC2086
+	rm -f "$VM/qemu.pid"
 	setsid qemu-system-x86_64 -M pc -m 4096 -smp 4 $accel $firmware \
 		-drive file="$VM/disk.qcow2",if=virtio \
 		-netdev user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22 \
 		-device virtio-net-pci,netdev=net0 \
-		-device virtio-vga,xres=1280,yres=800 \
+		-device virtio-vga,xres="${screen%x*}",yres="${screen#*x}" \
 		-device virtio-keyboard-pci -device virtio-tablet-pci \
 		-audiodev "$audio",id=snd0 -device intel-hda -device hda-duplex,audiodev=snd0 \
 		-display $display -serial file:"$VM/serial.log" \
@@ -160,6 +172,9 @@ start() {
 		-pidfile "$VM/qemu.pid" $seed > "$VM/qemu.log" 2>&1 &
 
 	# QEMU writes its pidfile a moment after it starts; `running` needs it.
+	# The old one is removed before QEMU starts (below): if it were still
+	# there, this loop would find it at once, `running` would see that
+	# QEMU dead, and report the new one had exited while it was booting.
 	for _ in $(seq 20); do [ -f "$VM/qemu.pid" ] && break; sleep 0.5; done
 
 	printf 'Waiting for the VM to answer on ssh'
