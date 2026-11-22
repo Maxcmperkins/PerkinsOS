@@ -92,6 +92,19 @@ jobs:
           make -C distro install-login DESTDIR="$PWD/stage"
           ls -R stage | head -50
 
+      # The package: build it, then install it with apt as a user would.
+      # apt fetches what it depends on, so a wrong package name in
+      # distro/deb/control.in fails here. -h only prints the usage, but
+      # needs every library to load.
+      - name: Build and install the .deb
+        run: |
+          make -C distro deb
+          dpkg-deb --info distro/build/deb/perkinsos_*.deb
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ./distro/build/deb/perkinsos_*.deb
+          perkinsos-compositor -h
+          dpkg -L perkinsos
+
       - name: Check the distro scripts parse
         run: |
           for f in distro/*.sh; do bash -n "$f"; done

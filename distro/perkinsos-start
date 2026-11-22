@@ -18,6 +18,9 @@ export MOZ_ENABLE_WAYLAND=1
 export QT_QPA_PLATFORM=wayland
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=PerkinsOS
+# Look for settings in PerkinsOS's folder before the system's: foot's
+# colours are there. (@PREFIX@ is filled in when this is installed.)
+export XDG_CONFIG_DIRS="@PREFIX@/share/perkinsos/xdg:${XDG_CONFIG_DIRS:-/etc/xdg}"
 
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}"
 mkdir -p "$LOG_DIR"

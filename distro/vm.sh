@@ -203,12 +203,37 @@ install() {
 	rsync -a --delete -e "$SSH" \
 		--exclude output --exclude dl --exclude .buildroot --exclude .git \
 		--exclude distro/build ./ max@127.0.0.1:PerkinsOS/
-	vm_ssh 'cd PerkinsOS && make -C distro && sudo make -C distro install'
+	remove_old_install
+	# Build the package and install it as apt would any other. The copy
+	# has no .git, so the version comes from here. --reinstall: while
+	# testing uncommitted changes the version stays the same.
+	local version
+	version=$(make -s -C distro version 2>/dev/null)
+	vm_ssh "cd PerkinsOS && make -C distro deb VERSION='$version' &&
+		sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --reinstall \
+			./distro/build/deb/perkinsos_*.deb"
 	# The user's systemd reads unit files when it starts; tell it to read
 	# them again, or a running session misses new ones (mako's drop-in).
 	vm_ssh 'XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user daemon-reload'
 	login_screen
 	echo "Installed. Restart the desktop with: distro/vm.sh ssh sudo systemctl restart greetd"
+}
+
+# VMs set up before the package had PerkinsOS in /usr/local, put there by
+# `make install`, and foot's colours over the foot package's own file.
+# Remove both once, so the package's copy in /usr is the one that runs.
+remove_old_install() {
+	vm_ssh '[ -e /usr/local/bin/perkinsos-compositor ] || exit 0
+		sudo rm -rf /usr/local/bin/perkinsos-* /usr/local/share/perkinsos \
+			/usr/local/share/fonts/vt323 \
+			/usr/local/share/xdg-desktop-portal/perkinsos-portals.conf \
+			/usr/local/lib/systemd/user/perkinsos-* \
+			/usr/local/lib/systemd/user/mako.service.d
+		if cmp -s /etc/xdg/foot/foot.ini PerkinsOS/buildroot/overlay/etc/xdg/foot/foot.ini; then
+			sudo rm /etc/xdg/foot/foot.ini
+			sudo apt-get install -y -q --reinstall \
+				-o Dpkg::Options::=--force-confmiss foot
+		fi'
 }
 
 # The login screen (distro/greetd.toml), plus one thing only the test VM
@@ -220,12 +245,12 @@ login_screen() {
 	vm_ssh "sudo passwd -S max | grep -q ' P ' || echo 'max:$VM_PASSWORD' | sudo chpasswd"
 	vm_ssh 'sudo rm -f /etc/systemd/system/getty@tty1.service.d/autologin.conf
 		sed -i "/^# PerkinsOS: start the desktop/,/^fi$/d" ~/.profile
-		cd PerkinsOS && sudo make -C distro install-login &&
+		cd PerkinsOS && sudo make -C distro install-login PREFIX=/usr &&
 		sudo tee -a /etc/greetd/config.toml > /dev/null <<"EOF"
 
 # Test VM only (distro/vm.sh): log max in once at boot, without a password.
 [initial_session]
-command = "/usr/local/bin/perkinsos-start"
+command = "/usr/bin/perkinsos-start"
 user = "max"
 EOF
 		sudo systemctl daemon-reload'

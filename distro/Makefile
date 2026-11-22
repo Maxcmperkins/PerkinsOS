@@ -5,6 +5,9 @@
 #
 #   make -C distro                 build into distro/build/
 #   sudo make -C distro install    install into /usr/local
+#   make -C distro deb             or build a package, which installs into
+#                                  /usr (docs/ROADMAP.md, M5):
+#   sudo apt install ./distro/build/deb/perkinsos_*.deb
 #   make -C distro clean
 #
 # Packages needed, by their Ubuntu 26.04 names:
@@ -49,7 +52,7 @@ SHELL_LIBS := $(shell $(PKG_CONFIG) --libs $(SHELL_PKGS)) -lm
 SHELL_PROTOCOLS := $(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml \
 	$(WLR_PROTOCOLS)/wlr-layer-shell-unstable-v1.xml
 
-.PHONY: all compositor shell install install-login clean
+.PHONY: all compositor shell install install-login deb version clean
 
 all: compositor shell
 
@@ -85,10 +88,15 @@ install:
 		install -D -m 0755 $(BUILD)/perkinsos-$$name $(DESTDIR)$(PREFIX)/bin/perkinsos-$$name || exit 1; \
 	done
 	install -D -m 0755 $(OVERLAY)/usr/bin/perkinsos-session $(DESTDIR)$(PREFIX)/bin/perkinsos-session
-	install -D -m 0755 perkinsos-start $(DESTDIR)$(PREFIX)/bin/perkinsos-start
+	sed 's|@PREFIX@|$(PREFIX)|' perkinsos-start > $(BUILD)/perkinsos-start
+	install -D -m 0755 $(BUILD)/perkinsos-start $(DESTDIR)$(PREFIX)/bin/perkinsos-start
 	install -d $(DESTDIR)$(PREFIX)/share/perkinsos/models
 	install -m 0644 $(OVERLAY)/usr/share/perkinsos/models/*.mesh $(DESTDIR)$(PREFIX)/share/perkinsos/models/
-	install -D -m 0644 $(OVERLAY)/etc/xdg/foot/foot.ini $(DESTDIR)/etc/xdg/foot/foot.ini
+	# The terminal's colours. Not in /etc/xdg/foot: that file belongs to
+	# the foot package. perkinsos-start adds this folder to the places
+	# programs look for settings (XDG_CONFIG_DIRS).
+	install -D -m 0644 $(OVERLAY)/etc/xdg/foot/foot.ini \
+		$(DESTDIR)$(PREFIX)/share/perkinsos/xdg/foot/foot.ini
 	# The pixel font VT323 and its licence; fc-cache tells fontconfig, the
 	# library apps ask for fonts, that it is there.
 	install -D -m 0644 $(OVERLAY)/usr/share/fonts/vt323/VT323-Regular.ttf \
@@ -117,6 +125,43 @@ install-login:
 	sed 's|@PREFIX@|$(PREFIX)|' greetd.toml > $(BUILD)/greetd.toml
 	install -D -m 0644 $(BUILD)/greetd.toml $(DESTDIR)/etc/greetd/config.toml
 	[ -n "$(DESTDIR)" ] || systemctl enable --force greetd.service
+
+# The package. It is built from scratch in build/deb/ with PREFIX=/usr,
+# where a distro's own packages go (/usr/local is for things installed by
+# hand, which apt does not manage). Then three steps:
+#   - dpkg-shlibdeps reads which libraries the programs link to and names
+#     the packages that provide them, at the versions they were built with;
+#   - deb/control.in gets the version, size and those packages filled in;
+#   - dpkg-deb packs the folder. --root-owner-group: the files belong to
+#     root once installed, whoever built the package.
+# VERSION: 0~ (lower than any real release, so a 1.0 will replace it), the
+# time of the last commit (so a newer build is a higher version, and apt
+# upgrades to it) and its hash. vm.sh passes it in: its copy has no .git.
+VERSION ?= 0~$(or $(shell git -C $(TOP) log -1 --date=format:%Y%m%d.%H%M --format=%cd+g%h 2>/dev/null),local)
+DEB := $(BUILD)/deb
+DEB_ROOT := $(DEB)/root
+ELF_PROGRAMS = $(DEB_ROOT)/usr/bin/perkinsos-compositor \
+	$(foreach name,$(SHELL_PROGRAMS),$(DEB_ROOT)/usr/bin/perkinsos-$(name))
+deb:
+	rm -rf $(DEB)
+	$(MAKE) BUILD=$(DEB)/build PREFIX=/usr all
+	$(MAKE) BUILD=$(DEB)/build PREFIX=/usr DESTDIR=$(DEB_ROOT) install
+	# dpkg-shlibdeps only runs inside a source package; a stub is enough.
+	mkdir -p $(DEB)/debian
+	printf 'Source: perkinsos\n\nPackage: perkinsos\nArchitecture: any\n' \
+		> $(DEB)/debian/control
+	cd $(DEB) && dpkg-shlibdeps -O $(ELF_PROGRAMS) > shlibs
+	mkdir -p $(DEB_ROOT)/DEBIAN
+	sed -e 's|@VERSION@|$(VERSION)|' \
+		-e "s|@ARCH@|$$(dpkg --print-architecture)|" \
+		-e "s|@SIZE@|$$(du -sk $(DEB_ROOT) | cut -f1)|" \
+		-e "s|@DEPENDS@|$$(sed -n 's/^shlibs:Depends=//p' $(DEB)/shlibs)|" \
+		deb/control.in > $(DEB_ROOT)/DEBIAN/control
+	dpkg-deb --root-owner-group --build $(DEB_ROOT) $(DEB)
+	@ls $(DEB)/*.deb
+
+version:
+	@echo $(VERSION)
 
 clean:
 	rm -rf $(BUILD)

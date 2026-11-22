@@ -91,13 +91,21 @@ The same `compositor/` and `shell/` also build on Ubuntu 26.04, where apps come 
 ```sh
 distro/vm.sh create    # once: make a test VM from Ubuntu's cloud image
 distro/vm.sh start     # boot it; a window opens
-distro/vm.sh install   # copy this repo in, build it, install it
+distro/vm.sh install   # copy this repo in, build the package, install it
 distro/vm.sh ssh PerkinsOS/distro/apps.sh       # a file manager, VS Code, Discord, Blender, Inkscape, OBS, ...
 distro/vm.sh ssh PerkinsOS/distro/apps.sh pin   # put the main ones on the dock
 distro/vm.sh stop
 ```
 
-Tested there: the Thunar file manager, Firefox (with file dialogs), VS Code, Discord, Blender, Inkscape, OBS Studio and DB Browser for SQLite open and work, with Noto fonts for other languages and emoji. Which apps work and why some needed help: [docs/APPS.md](docs/APPS.md). Apps that only speak X11 (Steam, IntelliJ, PyCharm) need XWayland, which is next; the VM already has the XWayland server installed. CI builds this path on every push, in an Ubuntu 26.04 container against Ubuntu's own wlroots (the `distro` job), and checks that `make install` has every file it copies; it does not start the desktop there.
+On any Ubuntu 26.04 machine, PerkinsOS installs as a package, so apt can upgrade and remove it like any other program:
+
+```sh
+make -C distro deb
+sudo apt install ./distro/build/deb/perkinsos_*.deb
+perkinsos-start        # from a console login; or the login screen: sudo make -C distro install-login PREFIX=/usr
+```
+
+Tested there: the Thunar file manager, Firefox (with file dialogs), VS Code, Discord, Blender, Inkscape, OBS Studio and DB Browser for SQLite open and work, with Noto fonts for other languages and emoji. Which apps work and why some needed help: [docs/APPS.md](docs/APPS.md). Apps that only speak X11 (Steam, IntelliJ, PyCharm) need XWayland, which is next; the VM already has the XWayland server installed. CI builds this path on every push, in an Ubuntu 26.04 container against Ubuntu's own wlroots (the `distro` job), checks that `make install` has every file it copies, and builds the `.deb` and installs it with apt; it does not start the desktop there.
 
 ## Repo layout
 

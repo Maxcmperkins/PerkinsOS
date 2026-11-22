@@ -105,6 +105,8 @@ Stage 3.
 
 **Done when:** the boot menu offers Windows and PerkinsOS, both start, and the laptop sleeps and wakes.
 
+**Status (22 Nov 2026), the package:** `make -C distro deb` builds `perkinsos_VERSION_amd64.deb`, installing into `/usr`. Its library dependencies are worked out from the programs (`dpkg-shlibdeps`); foot and a font are required, the session services (notifications, sound, keyring, portals, XWayland) recommended. The version is the last commit's time and hash, so a newer build upgrades an older one. foot's colours moved out of `/etc/xdg/foot`, which belongs to the foot package, to `/usr/share/perkinsos/xdg`, found through `XDG_CONFIG_DIRS`. The test VM now installs this way, and CI builds the package and installs it with apt in a clean container. The login screen is still a separate `make install-login`: it replaces greetd's own config file, which a package may only do with `dpkg-divert`.
+
 ### M6. Survive a working day (L)
 
 Stage 4. Fix what stops me, most painful first. Expected:

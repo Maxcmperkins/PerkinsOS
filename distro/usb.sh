@@ -83,7 +83,7 @@ rm -f /etc/netplan/50-cloud-init.yaml
 # looking for settings that are not there.
 touch /etc/cloud/cloud-init.disabled
 # The real login screen, without the test VM's automatic login.
-make -C /home/max/PerkinsOS/distro install-login
+make -C /home/max/PerkinsOS/distro install-login PREFIX=/usr
 # The password (see the top of distro/usb.sh: change it after logging in).
 echo 'max:$PASSWORD' | chpasswd
 # No way in from the network: the build's ssh key and the ssh server go.
