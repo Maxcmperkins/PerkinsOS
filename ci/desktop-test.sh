@@ -260,6 +260,25 @@ PY
 	press alt-q
 	sleep 1
 
+	# Minimise with the title bar's button, then get the window back with
+	# Alt+Tab. A lone terminal opens at 40,40 and is 698 wide, so its
+	# close button is centred on x 726 (as in the screenshots) and the
+	# minimise button, one button-and-gap further left, on x 706.
+	send 'WAYLAND_DISPLAY=wayland-0 foot > /dev/null 2>&1 &'
+	window_is shown
+	mouse_click 706 28
+	mouse_move 512 150
+	window_is gone
+	send 'kill -0 $! 2>/dev/null; echo minrunning=$?'
+	wait_for '^minrunning='
+	grep -aq '^minrunning=0' "$LOG" || fail "minimising the window ended the app"
+	echo "ok: the title bar's minimise button hid the window"
+	press alt-tab
+	window_is shown
+	echo "ok: Alt+Tab brought the minimised window back"
+	press alt-q
+	window_is gone
+
 	# Shut down from the launcher: SHUT DOWN is one of its last entries.
 	press alt-p
 	sleep 1

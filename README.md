@@ -46,7 +46,7 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | Alt+P, or the dock's Apps button | Open the launcher: type to filter, Enter to start, Escape to cancel |
 | Alt+Enter | Open a terminal |
 | Alt+Q | Close the focused window |
-| Alt+Tab, or Alt+F1 | Switch to the next window |
+| Alt+Tab, or Alt+F1 | Switch to the next window, minimised ones included |
 | Alt+left-drag | Move the window under the pointer, from anywhere in it |
 | Alt+right-drag | Resize the window under the pointer, from the corner nearest the pointer |
 | Alt+Escape | Quit the compositor |
@@ -137,6 +137,7 @@ Since then: the cockpit, and the start of a longer goal, using PerkinsOS in plac
   - [x] Alt+Tab, Alt+drag move and resize, shut down and restart from the launcher
   - [x] File dialogs, fonts for other languages, everyday apps installed and pinned (`distro/apps.sh`)
   - [x] Title bars with a close button, for apps that let the compositor draw them (`xdg-decoration`)
+  - [x] Minimise, from the title bar or the app's own button; Alt+Tab brings the window back
 - [ ] XWayland, for apps that only speak X11 (Steam, IntelliJ, PyCharm)
 - [ ] Draw with the graphics card
 - [ ] Lock screen, notifications, sound, login

@@ -49,7 +49,7 @@ Everything a normal sitting needs, in the Ubuntu VM, using only the keyboard and
 
 **Status (17 Nov 2026), slice 1 done:** Alt+Tab; Alt+left-drag moves and Alt+right-drag resizes a window; SHUT DOWN and RESTART in the launcher; Noto fonts; `xdg-desktop-portal` with the GTK backend, started through `perkinsos-session.target`, and a portal file dialog opens on the desktop in the VM. Next: title bars with a close button, minimise, launcher clicks and key repeat, and moving "quit the compositor" off Alt+Escape.
 
-**Slice 2 (19 Nov 2026):** title bars. The compositor speaks `xdg-decoration` and draws the title bar for every app that does too (foot, Qt apps): drag it to move the window, click its X to close it. Apps that do not speak it (GTK: Thunar, Firefox's tab strip) keep their own, so no window has two. Tested in CI (closing with the X, dragging the bar) and by hand in the Ubuntu VM. Next: the window's name in the bar (needs cairo in the compositor), minimise, launcher clicks and key repeat, and quit off Alt+Escape.
+**Slice 2 (19 Nov 2026):** title bars. The compositor speaks `xdg-decoration` and draws the title bar for every app that does too (foot, Qt apps): drag it to move the window, click its X to close it. Apps that do not speak it (GTK: Thunar, Firefox's tab strip) keep their own, so no window has two. Tested in CI (closing with the X, dragging the bar) and by hand in the Ubuntu VM. Then minimise: a button on the bar (or the app's own, for GTK apps) hides the window, and Alt+Tab brings it back; tested in CI. Next: the window's name in the bar (needs cairo in the compositor), launcher clicks and key repeat, and quit off Alt+Escape.
 
 ### M2. Draw with the graphics card (L)
 
