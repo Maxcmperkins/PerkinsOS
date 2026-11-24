@@ -68,6 +68,7 @@ struct mesh {
 	/* Where the engine exhausts are, for the glow drawn over the top. */
 	struct vec3 nozzles[2];
 	float nozzle_radius;
+	struct vec3 tips[2]; /* the left and right wing tips */
 };
 
 static struct vec3 vec(float x, float y, float z) {
@@ -107,6 +108,13 @@ static void finish_mesh(struct mesh *mesh) {
 		f->g = v->g;
 		f->b = v->b;
 		f->kind = v->kind;
+		/* The wing tips are the points furthest out to each side. */
+		if (i == 0 || v->position.x < mesh->tips[0].x) {
+			mesh->tips[0] = v->position;
+		}
+		if (i == 0 || v->position.x > mesh->tips[1].x) {
+			mesh->tips[1] = v->position;
+		}
 	}
 }
 
@@ -387,6 +395,35 @@ static void draw_halo(uint32_t *frame, int stride_pixels, int frame_width,
 static const int32_t sun[3] = { -6901, 12158, -8544 };
 static const int32_t glint_axis[3] = { -3957, 6971, -14293 };
 
+/* The 3x3 matrix, row by row, that turns a point by the pose's three
+ * angles: roll about the nose-to-tail axis, then pitch, then yaw. */
+static void rotation_of(const struct model_pose *pose, float rotation[9]) {
+	float cr = cosf(pose->roll), sr = sinf(pose->roll);
+	float cp = cosf(pose->pitch), sp = sinf(pose->pitch);
+	float cy = cosf(pose->yaw), sy = sinf(pose->yaw);
+	const float result[9] = {
+		cy * cr + sy * sp * sr, -cy * sr + sy * sp * cr, sy * cp,
+		cp * sr,                cp * cr,                 -sp,
+		-sy * cr + cy * sp * sr, sy * sr + cy * sp * cr, cy * cp,
+	};
+	memcpy(rotation, result, sizeof(result));
+}
+
+bool model_wing_tip(int which, int side, const struct model_pose *pose,
+		double tip[3]) {
+	const struct mesh *mesh = which == MODEL_TYPHOON ? &typhoon : &f35;
+	if (mesh->vertex_count == 0) {
+		return false;
+	}
+	float m[9];
+	rotation_of(pose, m);
+	struct vec3 p = mesh->tips[side];
+	tip[0] = pose->x + m[0] * p.x + m[1] * p.y + m[2] * p.z;
+	tip[1] = pose->y + m[3] * p.x + m[4] * p.y + m[5] * p.z;
+	tip[2] = pose->z + m[6] * p.x + m[7] * p.y + m[8] * p.z;
+	return true;
+}
+
 void model_draw(int which, const struct model_pose *pose, uint32_t *frame,
 		int stride_pixels, int frame_width, int frame_height) {
 	const struct mesh *mesh = which == MODEL_TYPHOON ? &typhoon : &f35;
@@ -394,18 +431,11 @@ void model_draw(int which, const struct model_pose *pose, uint32_t *frame,
 		return; /* its file was missing: models_init() said so */
 	}
 
-	/* Step 1 set-up: one 3x3 rotation matrix from the three angles (roll
-	 * about the nose-to-tail axis, then pitch, then yaw), converted to
-	 * Q14. This handful of floating-point sums happens once per aircraft
+	/* Step 1 set-up: one 3x3 rotation matrix from the three angles,
+	 * converted to Q14. This handful of floating-point sums happens once per aircraft
 	 * per frame; everything after it is whole numbers. */
-	float cr = cosf(pose->roll), sr = sinf(pose->roll);
-	float cp = cosf(pose->pitch), sp = sinf(pose->pitch);
-	float cy = cosf(pose->yaw), sy = sinf(pose->yaw);
-	float rotation[9] = {
-		cy * cr + sy * sp * sr, -cy * sr + sy * sp * cr, sy * cp,
-		cp * sr,                cp * cr,                 -sp,
-		-sy * cr + cy * sp * sr, sy * sr + cy * sp * cr, cy * cp,
-	};
+	float rotation[9];
+	rotation_of(pose, rotation);
 	int32_t m[9];
 	for (int i = 0; i < 9; i++) {
 		m[i] = (int32_t)lroundf(rotation[i] * 16384);
@@ -443,9 +473,11 @@ void model_draw(int which, const struct model_pose *pose, uint32_t *frame,
 		/* 2. Light. */
 		int red, green, blue;
 		if (v->kind == KIND_GLOW) {
-			red = v->r * glow >> 8;
-			green = v->g * glow >> 8;
-			blue = v->b * glow >> 8;
+			/* Half as bright again as its paint: dark orange on its own
+			 * looks like rust, not heat. */
+			red = clamp_byte(v->r * glow * 3 >> 9);
+			green = clamp_byte(v->g * glow * 3 >> 9);
+			blue = clamp_byte(v->b * glow * 3 >> 9);
 		} else {
 			/* Sunlight: brightest where the surface faces the sun,
 			 * nothing where it faces away. (A dot product of two
@@ -579,6 +611,6 @@ void model_draw(int which, const struct model_pose *pose, uint32_t *frame,
 		float scale = (float)pose->focal / z;
 		draw_halo(frame, stride_pixels, frame_width, frame_height,
 			(int)(pose->screen_x + scale * x), (int)(pose->screen_y - scale * y),
-			(int)(scale * mesh->nozzle_radius * 2.2f), (int)(pose->glow * 80));
+			(int)(scale * mesh->nozzle_radius * 1.4f), (int)(pose->glow * 80));
 	}
 }

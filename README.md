@@ -1,6 +1,6 @@
 # PerkinsOS
 
-A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon and an F-35 fly in formation ahead of you over sea and cloud, seen through the HUD, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps. The aircraft are 3D models, lit and drawn by a small software renderer. They are downloaded models converted to a simple mesh format (see Credits).
+A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon and an F-35 fly in formation either side of you over sea and cloud, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps. The aircraft are 3D models, lit and drawn by a small software renderer. They are downloaded models converted to a simple mesh format (see Credits).
 
 [![CI](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml/badge.svg)](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml)
 
@@ -165,7 +165,8 @@ The pixel font, VT323 (Copyright 2011, The VT323 Project Authors), is under the 
 
 Ideas parked here so they don't derail the plan. The long-term goal, running real apps and using this instead of Windows, has its own plan, [docs/PLAN-DAILY-DRIVER.md](docs/PLAN-DAILY-DRIVER.md), and a roadmap of milestones, [docs/ROADMAP.md](docs/ROADMAP.md).
 
-- Icons on the dock; System Info as cockpit gauges
+- Icons on the dock
+- A Settings page on the cockpit's centre display
 - Title bars for GTK apps too (they draw their own: GTK does not speak `xdg-decoration`)
 - Multiple screens: layer surfaces and maximize currently assume the first one
 - Real weather outside the jet: the cloud deck matches the real cloud cover where I am. A fetcher (systemd timer, Open-Meteo, location from a config file) writes a small weather file; the wallpaper reads it and sets the sea/cloud threshold in `sky.c` to the matching percentile of the cloud texture. Later: rain on the canopy, night sky, wind speed

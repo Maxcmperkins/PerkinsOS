@@ -342,9 +342,13 @@ void apps_load_pinned(struct app_list *list) {
 	}
 }
 
-void apps_load_all(struct app_list *list) {
+void apps_load_installed(struct app_list *list) {
 	apps_load_pinned(list);
 	add_installed(list);
+}
+
+void apps_load_all(struct app_list *list) {
+	apps_load_installed(list);
 	for (int i = 0; i < ACTION_COUNT; i++) {
 		add_app(list, &actions[i]);
 	}

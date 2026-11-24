@@ -13,11 +13,11 @@
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/utsname.h>
 #include <time.h>
 
 #include "apps.h"
 #include "client.h"
+#include "machine.h"
 #include "theme.h"
 #include "xdg-shell-client-protocol.h"
 
@@ -43,25 +43,6 @@ struct sysinfo {
 	double pointer_x, pointer_y;
 	bool running;
 };
-
-/* Read "Key:   12345 kB" style values from /proc/meminfo, in kilobytes. */
-static long meminfo_kb(const char *key) {
-	FILE *file = fopen("/proc/meminfo", "r");
-	if (file == NULL) {
-		return 0;
-	}
-	char line[128];
-	long value = 0;
-	size_t key_length = strlen(key);
-	while (fgets(line, sizeof(line), file) != NULL) {
-		if (strncmp(line, key, key_length) == 0 && line[key_length] == ':') {
-			sscanf(line + key_length + 1, "%ld", &value);
-			break;
-		}
-	}
-	fclose(file);
-	return value;
-}
 
 /* One "Label    value" row; returns the y for the next row. */
 static double draw_row(cairo_t *cr, const char *label, const char *value,
@@ -117,45 +98,24 @@ static void draw(struct sysinfo *app) {
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_NORMAL);
 
-	/* Gather the numbers. Everything comes from the kernel: uname() and
-	 * the text files it exposes under /proc. */
-	char value[160]; /* fits two 65-byte utsname fields */
+	struct machine machine;
+	machine_read(&machine);
+	char value[160];
 	double y = TITLE_HEIGHT + 34;
 
 	y = draw_row(cr, "SYSTEM", "PerkinsOS", y);
+	y = draw_row(cr, "KERNEL", machine.kernel, y);
 
-	struct utsname uts;
-	uname(&uts);
-	snprintf(value, sizeof(value), "%s %s", uts.sysname, uts.release);
-	y = draw_row(cr, "KERNEL", value, y);
-
-	double uptime = 0;
-	FILE *file = fopen("/proc/uptime", "r");
-	if (file != NULL) {
-		if (fscanf(file, "%lf", &uptime) != 1) {
-			uptime = 0;
-		}
-		fclose(file);
-	}
-	int seconds = (int)uptime;
+	int seconds = (int)machine.uptime;
 	snprintf(value, sizeof(value), "%d min %02d s", seconds / 60, seconds % 60);
 	y = draw_row(cr, "UPTIME", value, y);
 
-	long total = meminfo_kb("MemTotal");
-	long available = meminfo_kb("MemAvailable");
 	snprintf(value, sizeof(value), "%ld MB used of %ld MB",
-		(total - available) / 1024, total / 1024);
+		machine.memory_used_kb / 1024, machine.memory_total_kb / 1024);
 	y = draw_row(cr, "MEMORY", value, y);
 
-	double load = 0;
-	file = fopen("/proc/loadavg", "r");
-	if (file != NULL) {
-		if (fscanf(file, "%lf", &load) != 1) {
-			load = 0;
-		}
-		fclose(file);
-	}
-	snprintf(value, sizeof(value), "%.2f (1 min average)", load);
+	snprintf(value, sizeof(value), "%.2f (1 min average)",
+		machine.load_average);
 	draw_row(cr, "LOAD", value, y);
 
 	cairo_surface_flush(app->buffer->cairo_surface);

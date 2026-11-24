@@ -185,15 +185,35 @@ sys.exit(0 if bright(sys.argv[1]) < 10 and bright(sys.argv[2]) > 60 else 1)
 PY
 	echo "ok: clicking a radar contact at $CONTACT locked it"
 
-	# Cockpit keys: the buttons on the instrument panel start apps too.
-	# SYSTEM INFO is the third button along the top of the centre display
-	# (see key_position() in scene.c); click between the button and its name.
+	# The cockpit's centre display: its buttons change the page (see pages.c
+	# in shell/wallpaper, and key_position() in scene.c). SYSTEM INFO is the
+	# third along the top, and shows a page, not a window. That page's only
+	# button along the bottom, WINDOW, opens the window; HOME has no app
+	# there, so the window opening also proves that the page changed.
 	mouse_click 512 535
+	count cockpitpage perkinsos-sysinfo
+	grep -aq '^cockpitpage=0' "$LOG" || fail "the cockpit's SYSTEM INFO key opened a window, not a page"
+	mouse_click 319 652
 	count cockpitkey perkinsos-sysinfo
-	grep -aq '^cockpitkey=1' "$LOG" || fail "clicking the cockpit's SYSTEM INFO key did not start the app"
-	echo "ok: clicking SYSTEM INFO on the cockpit panel started the app"
+	grep -aq '^cockpitkey=1' "$LOG" || fail "the cockpit's SYSTEM page did not open, or its WINDOW key did not start the app"
+	echo "ok: SYSTEM INFO on the cockpit panel showed a page, and WINDOW on it started the app"
 	press alt-q
 	count cockpitclosed perkinsos-sysinfo
+
+	# APPS, the first button, lists every app. The second in the list, below
+	# TERMINAL, is SYSTEM INFO, which shows the page again; then WINDOW.
+	# (WINDOW just now went back to HOME, or the first click here would be
+	# on that page's HOME button.)
+	mouse_click 319 535
+	sleep 1
+	mouse_click 356 587
+	sleep 1
+	mouse_click 319 652
+	count cockpitapp perkinsos-sysinfo
+	grep -aq '^cockpitapp=1' "$LOG" || fail "the cockpit's list of apps did not work"
+	echo "ok: the cockpit's APPS page lists apps that can be clicked"
+	press alt-q
+	count cockpitappclosed perkinsos-sysinfo
 
 	# Maximize: a maximized window fills the screen except the dock. The
 	# terminal reports its own size in character cells once it has been
