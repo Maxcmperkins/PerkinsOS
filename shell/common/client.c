@@ -2,6 +2,8 @@
 #define _GNU_SOURCE /* memfd_create */
 #include <math.h>
 #include <poll.h>
+#include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -128,4 +130,19 @@ double text_width(cairo_t *cr, const char *text) {
 	cairo_text_extents_t extents;
 	cairo_text_extents(cr, text, &extents);
 	return extents.x_advance;
+}
+
+void shorten_name(const char *name, int most, char *out, size_t size) {
+	if ((int)strlen(name) <= most) {
+		snprintf(out, size, "%s", name);
+		return;
+	}
+	/* Don't cut a character that is several bytes in two (the second and
+	 * later bytes of one all start with the bits 10), or leave a space
+	 * before the dots. */
+	int keep = most - 2;
+	while (keep > 0 && ((name[keep] & 0xc0) == 0x80 || name[keep - 1] == ' ')) {
+		keep--;
+	}
+	snprintf(out, size, "%.*s..", keep, name);
 }
