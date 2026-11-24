@@ -43,13 +43,13 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Key | Action |
 | --- | --- |
-| Alt+P, or the dock's Apps button | Open the launcher: type to filter, Enter to start, Escape to cancel |
+| Alt+P, or the dock's Apps button | Open the launcher: type to filter, Enter or a click to start, Escape to cancel |
 | Alt+Enter | Open a terminal |
 | Alt+Q | Close the focused window |
 | Alt+Tab, or Alt+F1 | Switch to the next window, minimised ones included |
 | Alt+left-drag | Move the window under the pointer, from anywhere in it |
 | Alt+right-drag | Resize the window under the pointer, from the corner nearest the pointer |
-| Alt+Escape | Quit the compositor |
+| Alt+Shift+Escape | Quit the compositor |
 
 Click a window to focus it. Drag a title bar to move a window. To shut down or restart, open the launcher and type "shut" or "restart".
 
@@ -138,6 +138,8 @@ Since then: the cockpit, and the start of a longer goal, using PerkinsOS in plac
   - [x] File dialogs, fonts for other languages, everyday apps installed and pinned (`distro/apps.sh`)
   - [x] Title bars with a close button, for apps that let the compositor draw them (`xdg-decoration`)
   - [x] Minimise, from the title bar or the app's own button; Alt+Tab brings the window back
+  - [x] Launcher clicks and key repeat; the window's name in the title bar
+  - [x] Fullscreen
 - [ ] XWayland, for apps that only speak X11 (Steam, IntelliJ, PyCharm)
 - [ ] Draw with the graphics card
 - [ ] Lock screen, notifications, sound, login
@@ -163,8 +165,7 @@ The pixel font, VT323 (Copyright 2011, The VT323 Project Authors), is under the 
 
 Ideas parked here so they don't derail the plan. The long-term goal, running real apps and using this instead of Windows, has its own plan, [docs/PLAN-DAILY-DRIVER.md](docs/PLAN-DAILY-DRIVER.md), and a roadmap of milestones, [docs/ROADMAP.md](docs/ROADMAP.md).
 
-- Key repeat in the launcher, and clicking a result to start it
 - Icons on the dock; System Info as cockpit gauges
-- The window's name in the title bar; title bars for GTK apps too (they draw their own: GTK does not speak `xdg-decoration`)
+- Title bars for GTK apps too (they draw their own: GTK does not speak `xdg-decoration`)
 - Multiple screens: layer surfaces and maximize currently assume the first one
 - Real weather outside the jet: the cloud deck matches the real cloud cover where I am. A fetcher (systemd timer, Open-Meteo, location from a config file) writes a small weather file; the wallpaper reads it and sets the sea/cloud threshold in `sky.c` to the matching percentile of the cloud texture. Later: rain on the canopy, night sky, wind speed

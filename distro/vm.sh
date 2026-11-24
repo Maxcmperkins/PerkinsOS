@@ -25,7 +25,7 @@
 # `shot` gives a black picture: QEMU cannot read back a GL screen.
 # Stop the VM first to change either: they are set when QEMU starts. The user in the VM is "max", password "perkinsos" (VM_PASSWORD
 # below); sudo needs no password. After `install`, the VM logs max in to
-# the desktop by itself when it boots; quit the desktop (Alt+Escape) to
+# the desktop by itself when it boots; quit the desktop (Alt+Shift+Escape) to
 # see the login screen. It is a throwaway test VM, reachable only from
 # this machine (ssh on 127.0.0.1:2222, with a key, not the password).
 #

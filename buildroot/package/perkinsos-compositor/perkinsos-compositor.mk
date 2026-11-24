@@ -12,7 +12,7 @@ PERKINSOS_COMPOSITOR_SITE = $(BR2_EXTERNAL_PERKINSOS_PATH)/../compositor
 PERKINSOS_COMPOSITOR_SITE_METHOD = local
 PERKINSOS_COMPOSITOR_LICENSE = CC0-1.0
 PERKINSOS_COMPOSITOR_DEPENDENCIES = host-pkgconf host-wayland wlroots wayland \
-	wayland-protocols libxkbcommon libdrm
+	wayland-protocols libxkbcommon libdrm cairo
 
 # compositor/ keeps the Makefile it was forked with from TinyWL, so it is
 # built the same way as the stock tinywl package: cross-compiler settings in

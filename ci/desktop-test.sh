@@ -103,6 +103,49 @@ PY
 	grep -aq '^appclosed=0' "$LOG" || fail "Alt+Q did not close System Info"
 	echo "ok: System Info closed on request"
 
+	# Launcher: a held key repeats. Type five letters that match nothing,
+	# then hold Backspace: one press would delete one letter, so "sys" can
+	# only find System Info if the key repeated and cleared the rest.
+	press alt-p
+	sleep 2
+	for _ in 1 2 3 4 5; do press z; done
+	hold backspace 4000
+	press s; press y; press s
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/repeat-test.png > /dev/null
+	press ret
+	count repeated perkinsos-sysinfo
+	grep -aq '^repeated=1' "$LOG" || fail "holding Backspace in the launcher did not repeat"
+	echo "ok: a held key repeats in the launcher"
+	press alt-q
+	count repeatclosed perkinsos-sysinfo
+
+	# Launcher: clicking a result starts it. The image has four entries
+	# (TERMINAL, SYSTEM INFO, SHUT DOWN, RESTART), so the launcher is 248
+	# tall, centred in the 720 pixels above the dock, and the second
+	# result is centred on y 368. Any extra entry, such as foot's own
+	# duplicates of TERMINAL, would move it: this checks those are hidden.
+	press alt-p
+	sleep 2
+	mouse_move 512 368
+	sleep 1
+	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/launcher-click-test.png > /dev/null
+	mouse_click 512 368
+	count resultclick perkinsos-sysinfo
+	grep -aq '^resultclick=1' "$LOG" || fail "clicking a result in the launcher did not start it"
+	count resultgone perkinsos-launcher
+	grep -aq '^resultgone=0' "$LOG" || fail "the launcher stayed open after a result was clicked"
+	echo "ok: clicking a launcher result started it"
+	press alt-q
+	count resultclosed perkinsos-sysinfo
+
+	# Quitting the desktop takes Alt+Shift+Escape (checked at the end);
+	# Alt+Escape alone must not do it.
+	press alt-esc
+	send 'sleep 2; kill -0 $(cat /run/desktop.pid); echo altesc=$?'
+	wait_for '^altesc='
+	grep -aq '^altesc=0' "$LOG" || fail "Alt+Escape alone quit the desktop"
+	echo "ok: Alt+Escape alone does not quit the desktop"
+
 	# Mouse: clicking a dock button starts its program. (TERMINAL is the
 	# second button; see button_x() in shell/dock/main.c.)
 	mouse_click 196 744
@@ -241,7 +284,20 @@ PY
 	send 'WAYLAND_DISPLAY=wayland-0 foot > /dev/null 2>&1 &'
 	sleep 4
 	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/titlebar1-test.png > /dev/null
-	mouse_drag 300 28 500 228 left
+	# The window's name is on the bar, left of the buttons: some of its
+	# pixels are the bright green of the text. ("foot" is the default.)
+	python3 - output/titlebar1-test.png <<'PY' || fail "the title bar does not show the window's name"
+import sys
+sys.path.insert(0, "ci")
+from gif import read_png
+w, h, rgb = read_png(sys.argv[1])
+bright = sum(1 for y in range(18, 38) for x in range(44, 240)
+             if rgb[(y * w + x) * 3 + 1] > 150)
+sys.exit(0 if bright > 20 else 1)
+PY
+	echo "ok: the title bar shows the window's name"
+	# Grab the bar by the name itself: clicks must go through the text.
+	mouse_drag 56 28 256 228 left
 	mouse_move 512 150
 	sleep 1
 	python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/titlebar2-test.png > /dev/null
@@ -278,6 +334,73 @@ PY
 	echo "ok: Alt+Tab brought the minimised window back"
 	press alt-q
 	window_is gone
+
+	# Fullscreen: the window covers the dock too. Going to another window
+	# shows the dock again, coming back hides it, and leaving fullscreen
+	# (F11, bound here in foot) puts the window at 40,40 like any new one.
+	# dock_is shown|hidden: wait for the top edge of the dock's buttons,
+	# a run of green in the bottom 48 pixels, to be there or not.
+	dock_is() {
+		local i
+		for i in $(seq 40); do
+			python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/fullscreen-$2-test.png > /dev/null
+			python3 - output/fullscreen-$2-test.png "$1" <<'PY' && return 0
+import sys
+sys.path.insert(0, "ci")
+from gif import read_png
+w, h, rgb = read_png(sys.argv[1])
+green = sum(1 for y in range(h - 46, h) for x in range(0, 384)
+            if rgb[(y * w + x) * 3 + 1] > 80)
+sys.exit(0 if (green > 100) == (sys.argv[2] == "shown") else 1)
+PY
+			sleep 0.5
+		done
+		fail "fullscreen: the dock is not $1 ($2)"
+	}
+	dock_is shown before
+	send 'WAYLAND_DISPLAY=wayland-0 foot -F -o key-bindings.fullscreen=F11 >/dev/null 2>&1 &'
+	dock_is hidden on
+	echo "ok: a fullscreen window covers the dock"
+	press alt-p
+	# The launcher is 420 wide and centred: its outline is at x 302.
+	LAUNCHER=no
+	for _ in $(seq 40); do
+		python3 "$(dirname "$0")/screenshot.py" "$MONITOR" output/fullscreen-launcher-test.png > /dev/null
+		python3 - output/fullscreen-launcher-test.png <<'PY' && LAUNCHER=yes && break
+import sys
+sys.path.insert(0, "ci")
+from gif import read_png
+w, h, rgb = read_png(sys.argv[1])
+sys.exit(0 if max(rgb[(360 * w + x) * 3 + 1] for x in (302, 303)) > 150 else 1)
+PY
+		sleep 0.5
+	done
+	[ "$LAUNCHER" = yes ] || fail "the launcher did not open over a fullscreen window"
+	echo "ok: the launcher opens over a fullscreen window"
+	press s; press y; press s; press ret
+	dock_is shown other
+	echo "ok: opening another window over it shows the dock"
+	press alt-tab
+	dock_is hidden back
+	echo "ok: Alt+Tab back to it hides the dock again"
+	press f11
+	dock_is shown off
+	press alt-q
+	sleep 2
+	press alt-q
+	window_is gone
+	echo "ok: leaving fullscreen put the window and the dock back"
+
+	# Alt+Shift+Escape quits the desktop. Start it again for the last test.
+	press alt-shift-esc
+	send 'for i in $(seq 30); do pidof perkinsos-compositor || break; sleep .5; done'
+	send 'pidof perkinsos-compositor; echo quit=$?'
+	wait_for '^quit='
+	grep -aq '^quit=1' "$LOG" || fail "Alt+Shift+Escape did not quit the desktop"
+	echo "ok: Alt+Shift+Escape quit the desktop"
+	send '/etc/init.d/S99desktop start'
+	check restarted 'pidof perkinsos-dock > /dev/null' "the desktop did not start again"
+	sleep 5
 
 	# Shut down from the launcher: SHUT DOWN is one of its last entries.
 	press alt-p

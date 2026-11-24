@@ -61,6 +61,16 @@ s.sendall(("sendkey " + sys.argv[2] + "\n").encode())
 time.sleep(0.5)' "$MONITOR" "$1"
 }
 
+# hold KEY MS: press a key and keep it down for that many milliseconds.
+hold() {
+	python3 -c '
+import socket, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.sendall(("sendkey " + sys.argv[2] + " " + sys.argv[3] + "\n").encode())
+time.sleep(int(sys.argv[3]) / 1000 + 0.5)' "$MONITOR" "$1" "$2"
+}
+
 # mouse_move X Y / mouse_click X Y: put the pointer at a pixel position on
 # the VM's screen, and optionally press the left button there.
 mouse_move() {

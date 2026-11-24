@@ -12,7 +12,7 @@
 #
 # Packages needed, by their Ubuntu 26.04 names:
 #   build-essential pkg-config libwlroots-0.19-dev libwayland-dev
-#   wayland-protocols libxkbcommon-dev libcairo2-dev
+#   wayland-protocols libxkbcommon-dev libcairo2-dev (shell and compositor)
 # and to run it: foot (the terminal) and fonts-dejavu-core. For apps to be
 # usable: fonts-noto-* (other scripts, emoji) and xdg-desktop-portal with
 # xdg-desktop-portal-gtk (file open and save dialogs for sandboxed apps).

@@ -1,7 +1,7 @@
 /*
  * perkinsos-launcher: a search box in the middle of the screen.
  * Type to filter the list of installed apps (common/apps.c), Up/Down to choose, Enter to start the app,
- * Escape to cancel. It runs once and exits; the dock's "Apps" button and
+ * Escape to cancel. Or point at a result and click it. It runs once and exits; the dock's "Apps" button and
  * the compositor's Alt+P start a new one each time.
  *
  * Like the dock it is a layer-shell client, with two differences:
@@ -14,11 +14,13 @@
  * is the job of the xkbcommon library.
  */
 #define _GNU_SOURCE /* strcasestr */
+#include <linux/input-event-codes.h> /* BTN_LEFT */
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <time.h>
 #include <unistd.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -40,6 +42,7 @@ struct launcher {
 	struct zwlr_layer_shell_v1 *layer_shell;
 	struct wl_seat *seat;
 	struct wl_keyboard *keyboard;
+	struct wl_pointer *pointer;
 
 	struct wl_surface *surface;
 	struct zwlr_layer_surface_v1 *layer_surface;
@@ -51,6 +54,17 @@ struct launcher {
 	struct xkb_context *xkb_context;
 	struct xkb_keymap *xkb_keymap;
 	struct xkb_state *xkb_state;
+
+	/* Key repeat. The compositor only reports a key going down and coming
+	 * up; repeating it while it is held is each client's own job, at the
+	 * speed the compositor asks for (keyboard_repeat_info()). */
+	int32_t repeat_rate;     /* repeats per second; 0 means never */
+	int32_t repeat_delay;    /* ms a key is held before the first repeat */
+	uint32_t repeat_key;     /* the key being held, or 0 */
+	int64_t repeat_at;       /* when it repeats next, in now_ms() time */
+
+	double pointer_x, pointer_y;
+	int pressed_app;         /* index into apps the button went down on, or -1 */
 
 	char query[32];          /* what the user has typed */
 	struct app_list apps;    /* every app: pinned, then installed */
@@ -225,6 +239,13 @@ static void keyboard_keymap(void *data, struct wl_keyboard *keyboard,
 	}
 }
 
+/* Milliseconds on a clock that only goes forwards. */
+static int64_t now_ms(void) {
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
 static void keyboard_enter(void *data, struct wl_keyboard *keyboard,
 		uint32_t serial, struct wl_surface *surface, struct wl_array *keys) {
 	/* We now have keyboard focus. */
@@ -232,14 +253,19 @@ static void keyboard_enter(void *data, struct wl_keyboard *keyboard,
 
 static void keyboard_leave(void *data, struct wl_keyboard *keyboard,
 		uint32_t serial, struct wl_surface *surface) {
+	/* We will not hear the key come up, so stop repeating it now. */
+	struct launcher *launcher = data;
+	launcher->repeat_key = 0;
 }
 
-static void keyboard_key(void *data, struct wl_keyboard *keyboard,
-		uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
-	struct launcher *launcher = data;
-	if (state != WL_KEYBOARD_KEY_STATE_PRESSED || launcher->xkb_state == NULL) {
-		return;
-	}
+/* Start the chosen app and close. */
+static void start_app(struct launcher *launcher, int app) {
+	spawn(launcher->apps.items[app].command);
+	launcher->running = false;
+}
+
+/* Act on a key: once when it goes down, then again for each repeat. */
+static void press_key(struct launcher *launcher, uint32_t key) {
 	/* Wayland sends Linux evdev key codes. XKB key codes are the same
 	 * numbers plus 8, for historical reasons (X11 reserved codes 0 to 7). */
 	xkb_keycode_t keycode = key + 8;
@@ -255,8 +281,7 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
 	case XKB_KEY_Return:
 	case XKB_KEY_KP_Enter:
 		if (launcher->match_count > 0) {
-			spawn(launcher->apps.items[
-				launcher->matches[launcher->selected]].command);
+			start_app(launcher, launcher->matches[launcher->selected]);
 		}
 		launcher->running = false;
 		return;
@@ -293,6 +318,55 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
 	draw(launcher);
 }
 
+static void keyboard_key(void *data, struct wl_keyboard *keyboard,
+		uint32_t serial, uint32_t time, uint32_t key, uint32_t state) {
+	struct launcher *launcher = data;
+	if (launcher->xkb_state == NULL) {
+		return;
+	}
+	if (state != WL_KEYBOARD_KEY_STATE_PRESSED) {
+		/* Only the key being repeated stops the repeat: typing fast, the
+		 * next key often goes down before the last one is up. */
+		if (key == launcher->repeat_key) {
+			launcher->repeat_key = 0;
+		}
+		return;
+	}
+	press_key(launcher, key);
+	/* The keymap knows which keys repeat: letters do, Shift does not. */
+	if (launcher->repeat_rate > 0 &&
+			xkb_keymap_key_repeats(launcher->xkb_keymap, key + 8)) {
+		launcher->repeat_key = key;
+		launcher->repeat_at = now_ms() + launcher->repeat_delay;
+	}
+}
+
+static void keyboard_repeat_info(void *data, struct wl_keyboard *keyboard,
+		int32_t rate, int32_t delay) {
+	struct launcher *launcher = data;
+	launcher->repeat_rate = rate;
+	launcher->repeat_delay = delay;
+	if (rate <= 0) {
+		launcher->repeat_key = 0;
+	}
+}
+
+/* Repeat the held key if it is due. Returns how many milliseconds until it
+ * is next due, or -1 if no key is repeating. */
+static int repeat_held_key(struct launcher *launcher) {
+	if (launcher->repeat_key == 0) {
+		return -1;
+	}
+	int64_t now = now_ms();
+	if (now >= launcher->repeat_at) {
+		press_key(launcher, launcher->repeat_key);
+		/* Count from now, not from when it was due: after a slow frame,
+		 * missed repeats are skipped instead of arriving in a burst. */
+		launcher->repeat_at = now + 1000 / launcher->repeat_rate;
+	}
+	return (int)(launcher->repeat_at - now);
+}
+
 static void keyboard_modifiers(void *data, struct wl_keyboard *keyboard,
 		uint32_t serial, uint32_t depressed, uint32_t latched,
 		uint32_t locked, uint32_t group) {
@@ -311,6 +385,85 @@ static const struct wl_keyboard_listener keyboard_listener = {
 	.leave = keyboard_leave,
 	.key = keyboard_key,
 	.modifiers = keyboard_modifiers,
+	.repeat_info = keyboard_repeat_info,
+};
+
+/* ---- pointer events ---- */
+
+/* The index into matches[] of the result under the pointer, or -1. The
+ * sizes are the ones draw() uses. */
+static int match_at(struct launcher *launcher) {
+	double y = launcher->pointer_y - (2 * PADDING + ROW_HEIGHT);
+	if (launcher->pointer_x < PADDING ||
+			launcher->pointer_x >= WIDTH - PADDING || y < 0) {
+		return -1;
+	}
+	int row = (int)(y / ROW_HEIGHT);
+	int match = launcher->first + row;
+	return row < launcher->rows && match < launcher->match_count ? match : -1;
+}
+
+static void pointer_enter(void *data, struct wl_pointer *pointer,
+		uint32_t serial, struct wl_surface *surface,
+		wl_fixed_t x, wl_fixed_t y) {
+	/* Remember where it is, but do not select: the launcher may have
+	 * opened under a pointer nobody is touching. */
+	struct launcher *launcher = data;
+	launcher->pointer_x = wl_fixed_to_double(x);
+	launcher->pointer_y = wl_fixed_to_double(y);
+}
+
+static void pointer_leave(void *data, struct wl_pointer *pointer,
+		uint32_t serial, struct wl_surface *surface) {
+	struct launcher *launcher = data;
+	launcher->pointer_x = launcher->pointer_y = -1;
+	launcher->pressed_app = -1;
+}
+
+static void pointer_motion(void *data, struct wl_pointer *pointer,
+		uint32_t time, wl_fixed_t x, wl_fixed_t y) {
+	struct launcher *launcher = data;
+	launcher->pointer_x = wl_fixed_to_double(x);
+	launcher->pointer_y = wl_fixed_to_double(y);
+	int match = match_at(launcher);
+	if (match >= 0 && match != launcher->selected) {
+		launcher->selected = match;
+		draw(launcher);
+	}
+}
+
+static void pointer_button(void *data, struct wl_pointer *pointer,
+		uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
+	struct launcher *launcher = data;
+	if (button != BTN_LEFT) {
+		return;
+	}
+	int match = match_at(launcher);
+	int app = match >= 0 ? launcher->matches[match] : -1;
+	if (state == WL_POINTER_BUTTON_STATE_PRESSED) {
+		launcher->pressed_app = app;
+	} else {
+		/* Start it when the button comes up on the same result. Closing
+		 * on the press instead would send the release to whatever is
+		 * behind us. */
+		if (app >= 0 && app == launcher->pressed_app) {
+			start_app(launcher, app);
+		}
+		launcher->pressed_app = -1;
+	}
+}
+
+static void pointer_axis(void *data, struct wl_pointer *pointer,
+		uint32_t time, uint32_t axis, wl_fixed_t value) {
+	/* Scroll wheel: not used. */
+}
+
+static const struct wl_pointer_listener pointer_listener = {
+	.enter = pointer_enter,
+	.leave = pointer_leave,
+	.motion = pointer_motion,
+	.button = pointer_button,
+	.axis = pointer_axis,
 };
 
 /* ---- seat and registry events ---- */
@@ -324,10 +477,22 @@ static void seat_capabilities(void *data, struct wl_seat *seat,
 		wl_keyboard_add_listener(launcher->keyboard, &keyboard_listener,
 			launcher);
 	}
+	if ((capabilities & WL_SEAT_CAPABILITY_POINTER) &&
+			launcher->pointer == NULL) {
+		launcher->pointer = wl_seat_get_pointer(seat);
+		wl_pointer_add_listener(launcher->pointer, &pointer_listener,
+			launcher);
+	}
+}
+
+static void seat_name(void *data, struct wl_seat *seat, const char *name) {
+	/* Sent from version 2 on. Not used, but an event without a handler
+	 * would end the program. */
 }
 
 static const struct wl_seat_listener seat_listener = {
 	.capabilities = seat_capabilities,
+	.name = seat_name,
 };
 
 static void registry_global(void *data, struct wl_registry *registry,
@@ -342,8 +507,10 @@ static void registry_global(void *data, struct wl_registry *registry,
 		launcher->layer_shell = wl_registry_bind(registry, name,
 			&zwlr_layer_shell_v1_interface, 1);
 	} else if (strcmp(interface, wl_seat_interface.name) == 0) {
+		/* Version 4 is the first that sends repeat_info. The keyboard
+		 * and pointer we get from the seat have its version too. */
 		launcher->seat = wl_registry_bind(registry, name,
-			&wl_seat_interface, 1);
+			&wl_seat_interface, version < 4 ? version : 4);
 		wl_seat_add_listener(launcher->seat, &seat_listener, launcher);
 	}
 }
@@ -358,7 +525,7 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 int main(void) {
-	struct launcher launcher = { .running = true };
+	struct launcher launcher = { .running = true, .pressed_app = -1 };
 	launcher.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
 	apps_load_all(&launcher.apps);
 	launcher.matches = malloc(launcher.apps.count * sizeof(int));
@@ -396,7 +563,9 @@ int main(void) {
 	wl_surface_commit(launcher.surface);
 
 	while (launcher.running) {
-		if (dispatch_with_timeout(launcher.display, -1) < 0) {
+		/* Sleep until an event, or until a held key is due to repeat. */
+		if (dispatch_with_timeout(launcher.display,
+				repeat_held_key(&launcher)) < 0) {
 			break;
 		}
 	}
