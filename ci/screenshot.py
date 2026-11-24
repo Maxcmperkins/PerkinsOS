@@ -38,10 +38,14 @@ def read_ppm(path):
     with open(path, "rb") as f:
         data = f.read()
     # Header is: "P6" width height maxval, separated by whitespace.
-    fields = data.split(None, 4)
+    fields = data.split(None, 3)
     assert fields[0] == b"P6", "not a binary PPM"
     width, height = int(fields[1]), int(fields[2])
-    return width, height, fields[4][: width * height * 3]
+    # What is left is maxval, exactly one whitespace byte, then the pixels.
+    # Splitting on whitespace again would also eat the first pixels if their
+    # bytes happen to be whitespace (a colour of 32 is a space).
+    pixels = fields[3][len(b"255\n"):]
+    return width, height, pixels[: width * height * 3]
 
 
 def write_png(path, width, height, rgb):
