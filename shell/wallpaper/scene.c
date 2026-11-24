@@ -8,10 +8,10 @@
  *   HUD         green symbols on the glass in front of you: pitch ladder,
  *               flight path marker, heading tape, speed and altitude
  *   cockpit     canopy arch, sills and instrument panel (cached)
- *   screens     left screen: radar, each contact a running program
+ *   screens     left screen: radar, each contact one of the busiest programs
  *               right screen: RWR, each "threat" a program using the CPU
  *   keys        the buttons between the screens start apps
- *   dials       CPU, memory, load and task count (on a wide screen)
+ *   dials       CPU, memory, load and task count (where there is room)
  *   consoles    caution lights and switches, where the dials don't fit
  *
  * Everything is designed on a canvas 768 units tall (DESIGN_HEIGHT) and
@@ -406,6 +406,49 @@ static double process_bearing(const struct process *process) {
 	return fmod(process->pid * 137.508, 360.0);
 }
 
+/* How many contacts the radar shows. A desktop distro runs 50 or more
+ * programs, most of them idle system services, and all of them at once
+ * fill the scope with dots. */
+#define RADAR_CONTACTS 16
+
+/* Is process a busier than process b? Anything using the CPU beats
+ * anything idle, and the busier the better; between idle programs, the
+ * one using more memory wins. Memory hardly changes from one sample to the
+ * next, so the idle ones on the scope stay put. */
+static bool busier(const struct process *a, const struct process *b) {
+	bool a_active = a->cpu_percent >= 0.5, b_active = b->cpu_percent >= 0.5;
+	if (a_active != b_active) {
+		return a_active;
+	}
+	if (a_active && a->cpu_percent != b->cpu_percent) {
+		return a->cpu_percent > b->cpu_percent;
+	}
+	return a->memory_kb > b->memory_kb;
+}
+
+/* Marks which processes the radar shows: the locked one, then the busiest
+ * until there are RADAR_CONTACTS. Returns how many it marked. */
+static int radar_pick(const struct scene *scene, bool shown[MAX_PROCESSES]) {
+	const struct process_list *list = &scene->processes;
+	int picked = 0;
+	for (int i = 0; i < list->count; i++) {
+		shown[i] = list->items[i].pid == scene->locked_pid;
+		picked += shown[i];
+	}
+	while (picked < RADAR_CONTACTS && picked < list->count) {
+		int best = -1;
+		for (int i = 0; i < list->count; i++) {
+			if (!shown[i] && (best < 0 ||
+					busier(&list->items[i], &list->items[best]))) {
+				best = i;
+			}
+		}
+		shown[best] = true;
+		picked++;
+	}
+	return picked;
+}
+
 static void draw_radar(struct scene *scene, cairo_t *cr,
 		const struct layout *l, double t) {
 	double cx = l->radar_x, cy = l->scope_y;
@@ -432,11 +475,18 @@ static void draw_radar(struct scene *scene, cairo_t *cr,
 	cairo_set_line_width(cr, HUD_LINE);
 	line(cr, cx, cy, sx, sy);
 
-	/* The contacts. */
+	/* The contacts. Range still comes from the position in the whole
+	 * list, not among the ones shown, so a contact appearing or leaving
+	 * doesn't shift the others. */
+	bool shown[MAX_PROCESSES];
+	radar_pick(scene, shown);
 	scene->hover_pid = 0;
 	double nearest = 11; /* how close the pointer has to be */
 	for (int i = 0; i < list->count; i++) {
 		struct process *process = &list->items[i];
+		if (!shown[i]) {
+			continue;
+		}
 		double bearing = process_bearing(process);
 		double range = SCOPE_RADIUS * (0.16 + 0.74 *
 			(list->count > 1 ? (double)i / (list->count - 1) : 0));
@@ -577,7 +627,15 @@ static void draw_data_display(struct scene *scene, cairo_t *cr,
 
 	/* Right half: totals from both scopes. */
 	cairo_set_source_rgb(cr, HUD_DIM);
-	snprintf(row, sizeof(row), "CONTACTS %d", scene->processes.count);
+	bool shown[MAX_PROCESSES];
+	int contacts = radar_pick(scene, shown);
+	if (contacts < scene->processes.count) {
+		/* Shown, out of how many running. */
+		snprintf(row, sizeof(row), "CONTACTS %d/%d", contacts,
+			scene->processes.count);
+	} else {
+		snprintf(row, sizeof(row), "CONTACTS %d", contacts);
+	}
 	draw_text(cr, row, right, y);
 	if (threats == 0) {
 		snprintf(row, sizeof(row), "RWR CLEAR");
