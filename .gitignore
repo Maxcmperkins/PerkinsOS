@@ -10,6 +10,7 @@ dl/
 *.o
 *.a
 *.so
+__pycache__/
 compositor/build/
 distro/build/
 shell/build/
