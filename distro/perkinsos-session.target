@@ -8,9 +8,10 @@
 #
 # Wants= also starts the session's own services with it: mako shows
 # notifications (with our style: mako.service.d/perkinsos.conf), and the
-# polkit agent asks for your password when an app needs root.
+# polkit agent asks for your password when an app needs root, the idle
+# service locks the screen, and the timer fetches the weather.
 [Unit]
 Description=PerkinsOS desktop session
 BindsTo=graphical-session.target
-Wants=graphical-session-pre.target mako.service perkinsos-polkit-agent.service
+Wants=graphical-session-pre.target mako.service perkinsos-polkit-agent.service perkinsos-idle.service perkinsos-weather.timer
 After=graphical-session-pre.target

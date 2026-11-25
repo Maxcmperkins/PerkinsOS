@@ -1,0 +1,22 @@
+# The PerkinsOS login screen (docs/ROADMAP.md, M3), installed as
+# /etc/greetd/config.toml by `sudo make -C distro install-login`.
+#
+# greetd is the login manager: it shows a "greeter" program, checks the
+# name and password it is given (through PAM, like any login), then starts
+# the session as that user. The greeter here is tuigreet, a text login on
+# the console: nothing graphical has to work before you have logged in.
+
+[terminal]
+# The console to log in on. 7 is where login screens usually live; the
+# text consoles stay on 1 to 6 (Ctrl+Alt+F1 and so on).
+vt = 7
+
+[default_session]
+# --cmd: what to start after logging in. @PREFIX@ becomes where
+# perkinsos-start was installed. --theme: the HUD's greens, as near as the
+# console's 16 colours get (button=green draws the key names, ESC, F2 and
+# so on, black on green; lighter, they came out grey and hard to read).
+# F12 opens tuigreet's shut down / restart menu.
+command = "tuigreet --cmd @PREFIX@/bin/perkinsos-start --time --remember --asterisks --greeting 'PERKINSOS // AUTHENTICATE' --power-shutdown 'systemctl poweroff' --power-reboot 'systemctl reboot' --kb-power 12 --theme 'border=green;text=lightgreen;prompt=green;time=green;action=lightgreen;button=green;container=black;input=lightgreen;greet=lightgreen'"
+# The greeter runs as greetd's own user, not as root.
+user = "_greetd"

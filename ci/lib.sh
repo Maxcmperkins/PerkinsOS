@@ -61,6 +61,16 @@ s.sendall(("sendkey " + sys.argv[2] + "\n").encode())
 time.sleep(0.5)' "$MONITOR" "$1"
 }
 
+# hold KEY MS: press a key and keep it down for that many milliseconds.
+hold() {
+	python3 -c '
+import socket, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.connect(sys.argv[1])
+s.sendall(("sendkey " + sys.argv[2] + " " + sys.argv[3] + "\n").encode())
+time.sleep(int(sys.argv[3]) / 1000 + 0.5)' "$MONITOR" "$1" "$2"
+}
+
 # mouse_move X Y / mouse_click X Y: put the pointer at a pixel position on
 # the VM's screen, and optionally press the left button there.
 mouse_move() {
@@ -68,6 +78,10 @@ mouse_move() {
 }
 mouse_click() {
 	python3 "$(dirname "${BASH_SOURCE[0]}")/mouse.py" "$QMP" "$1" "$2" click
+}
+# mouse_drag X1 Y1 X2 Y2 left|right: drag with that button.
+mouse_drag() {
+	python3 "$(dirname "${BASH_SOURCE[0]}")/mouse.py" "$QMP" "$1" "$2" drag "$3" "$4" "$5"
 }
 # mouse_alt_drag X1 Y1 X2 Y2 left|right: hold Alt and drag with that button.
 mouse_alt_drag() {

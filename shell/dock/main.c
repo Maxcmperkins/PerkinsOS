@@ -12,8 +12,8 @@
  *   3. commit with no buffer; the compositor replies with a configure
  *      event carrying our real size
  *   4. on configure: draw a buffer that size, attach it, commit
- *   5. loop: redraw when the pointer moves over a button or the minute
- *      changes; start a program when a button is clicked
+ *   5. loop: redraw when the pointer moves over a button, one is pressed,
+ *      or the minute changes; start a program when a button is clicked
  */
 #include <linux/input-event-codes.h> /* BTN_LEFT */
 #include <stdbool.h>
@@ -52,6 +52,7 @@ struct dock {
 	int width, height; /* 0 until the first configure */
 
 	int hover;      /* index of the button under the pointer, or -1 */
+	int pressed;    /* the button held down by the mouse, or -1 */
 	bool running;
 };
 
@@ -82,6 +83,153 @@ static int button_at(double x, double y) {
 	return -1;
 }
 
+/* ---- drawing ----
+ *
+ * The dock is the bottom edge of the cockpit's instrument panel: the same
+ * dark painted metal as shell/wallpaper draws above it, with push buttons
+ * and a clock let into it. Light comes from above, so top edges are bright
+ * and bottom edges dark; a thing let in has those the other way round.
+ */
+
+/* Paint a shape with a blend of two greys, from y0 down to y1. */
+static void set_greys(cairo_t *cr, double y0, double y1, double top, double bottom) {
+	cairo_pattern_t *pattern = cairo_pattern_create_linear(0, y0, 0, y1);
+	/* A little bluer than grey, like the rest of the metal. */
+	cairo_pattern_add_color_stop_rgb(pattern, 0, top, top * 1.05, top * 1.13);
+	cairo_pattern_add_color_stop_rgb(pattern, 1, bottom, bottom * 1.05, bottom * 1.13);
+	cairo_set_source(cr, pattern);
+	cairo_pattern_destroy(pattern);
+}
+
+/* A recess: a rounded hole with a lit lower lip, dark inside. */
+static void draw_recess(cairo_t *cr, double x, double y, double w, double h) {
+	rounded_rect(cr, x, y + 1, w, h, 5);
+	set_greys(cr, y, y + h + 1, 0.05, 0.30);
+	cairo_fill(cr);
+	rounded_rect(cr, x, y, w, h, 5);
+	cairo_set_source_rgb(cr, 0.018, 0.02, 0.023);
+	cairo_fill(cr);
+}
+
+/* The metal, its top edge and a fastener at each end. */
+static void draw_panel(struct buffer *buffer) {
+	cairo_t *cr = buffer->cr;
+	cairo_set_line_width(cr, 1);
+	set_greys(cr, 0, DOCK_HEIGHT, 0.135, 0.070);
+	cairo_paint(cr);
+
+	/* Grain: nudge each pixel up or down a little, at random but the same
+	 * every time (a small hash of its position). */
+	cairo_surface_flush(buffer->cairo_surface);
+	for (int y = 0; y < buffer->height; y++) {
+		uint32_t *row = (uint32_t *)buffer->pixels + (size_t)y * buffer->width;
+		for (int x = 0; x < buffer->width; x++) {
+			uint32_t n = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u;
+			n = (n ^ (n >> 13)) * 1274126177u;
+			/* 0 to 4 on each of red, green and blue. None of them is
+			 * near 255 here, so the sum can't overflow. */
+			row[x] += (n >> 16) % 5 * 0x00010101u;
+		}
+	}
+	cairo_surface_mark_dirty(buffer->cairo_surface);
+
+	/* A seam where the panel above ends: a dark groove, then a lit edge. */
+	cairo_rectangle(cr, 0, 0, buffer->width, 2);
+	cairo_set_source_rgb(cr, 0.01, 0.01, 0.012);
+	cairo_fill(cr);
+	cairo_rectangle(cr, 0, 2, buffer->width, 1);
+	cairo_set_source_rgb(cr, 0.30, 0.32, 0.35);
+	cairo_fill(cr);
+}
+
+static void draw_button(cairo_t *cr, int index, bool hover, bool pressed) {
+	double x = button_x(index), y = (DOCK_HEIGHT - BUTTON_HEIGHT) / 2 + 1;
+	draw_recess(cr, x, y, BUTTON_WIDTH, BUTTON_HEIGHT);
+
+	/* The cap. Pressed, it is further in: smaller, lower, and darker. */
+	double in = pressed ? 4 : 2.5, down = pressed ? 1 : 0;
+	double cx = x + in, cy = y + in + down;
+	double cw = BUTTON_WIDTH - 2 * in, ch = BUTTON_HEIGHT - 2 * in;
+	rounded_rect(cr, cx, cy, cw, ch, 4);
+	if (pressed) {
+		set_greys(cr, cy, cy + ch, 0.06, 0.10);
+	} else {
+		set_greys(cr, cy, cy + ch, hover ? 0.25 : 0.20, hover ? 0.13 : 0.10);
+	}
+	cairo_fill(cr);
+	if (!pressed) {
+		/* Light along the top edge. */
+		cairo_set_source_rgba(cr, 0.8, 0.88, 1.0, 0.28);
+		cairo_rectangle(cr, cx + 4, cy + 0.5, cw - 8, 1);
+		cairo_fill(cr);
+	}
+
+	/* The legend, on a dark window in the cap, lit from behind. It is
+	 * brighter under the pointer, and turns inside out when pressed. */
+	rounded_rect(cr, cx + 4, cy + 5, cw - 8, ch - 10, 2);
+	if (pressed) {
+		cairo_set_source_rgb(cr, HUD_GREEN);
+	} else if (hover) {
+		cairo_set_source_rgb(cr, 0.02, 0.22, 0.09);
+	} else {
+		cairo_set_source_rgb(cr, HUD_BLACK);
+	}
+	cairo_fill_preserve(cr);
+	/* The launcher's button, and the one under the pointer, are outlined. */
+	if (hover || index == 0) {
+		cairo_set_source_rgba(cr, HUD_GREEN, hover ? 0.9 : 0.45);
+		cairo_set_line_width(cr, 1);
+		cairo_stroke(cr);
+	}
+	cairo_new_path(cr);
+
+	char label[16];
+	shorten_name(button_label(index), 14, label, sizeof(label));
+	cairo_set_font_size(cr, FONT_SIZE(11.5));
+	if (pressed) {
+		cairo_set_source_rgb(cr, HUD_BLACK);
+	} else {
+		cairo_set_source_rgb(cr, HUD_GREEN);
+	}
+	draw_text(cr, label, cx + (cw - text_width(cr, label)) / 2, cy + ch / 2);
+}
+
+/* The clock: a small screen let into the panel. The VM's clock runs on
+ * UTC, which aviation writes with a Z ("Zulu time"). */
+#define CLOCK_WIDTH 96
+
+static void draw_clock(cairo_t *cr, int width) {
+	double x = width - CLOCK_WIDTH - 22, y = (DOCK_HEIGHT - BUTTON_HEIGHT) / 2 + 1;
+	draw_recess(cr, x - 3, y - 1, CLOCK_WIDTH + 6, BUTTON_HEIGHT + 2);
+	rounded_rect(cr, x, y + 2, CLOCK_WIDTH, BUTTON_HEIGHT - 4, 3);
+	cairo_set_source_rgb(cr, HUD_BLACK);
+	cairo_fill(cr);
+
+	char text[16];
+	time_t now = time(NULL);
+	strftime(text, sizeof(text), "%H:%MZ", gmtime(&now));
+	cairo_set_font_size(cr, FONT_SIZE(17));
+	double tx = x + (CLOCK_WIDTH - text_width(cr, text)) / 2;
+	cairo_set_source_rgb(cr, HUD_GREEN);
+	draw_text(cr, text, tx, DOCK_HEIGHT / 2.0 + 1);
+
+	/* The glass over it reflects the sky, in its upper half. */
+	rounded_rect(cr, x, y + 2, CLOCK_WIDTH, (BUTTON_HEIGHT - 4) / 2.0, 3);
+	cairo_set_source_rgba(cr, 0.75, 0.88, 1.0, 0.07);
+	cairo_fill(cr);
+
+	/* A fastener beside it. */
+	cairo_new_sub_path(cr);
+	cairo_arc(cr, width - 9, DOCK_HEIGHT / 2.0 + 1, 3.4, 0, 6.2832);
+	set_greys(cr, DOCK_HEIGHT / 2.0 - 3, DOCK_HEIGHT / 2.0 + 5, 0.42, 0.12);
+	cairo_fill(cr);
+	cairo_move_to(cr, width - 11, DOCK_HEIGHT / 2.0 + 2.5);
+	cairo_line_to(cr, width - 7, DOCK_HEIGHT / 2.0 - 0.5);
+	cairo_set_source_rgb(cr, 0.02, 0.02, 0.025);
+	cairo_set_line_width(cr, 1.2);
+	cairo_stroke(cr);
+}
+
 static void draw(struct dock *dock) {
 	if (dock->width == 0) {
 		return; /* not configured yet: we don't know our size */
@@ -99,59 +247,13 @@ static void draw(struct dock *dock) {
 	}
 	cairo_t *cr = dock->buffer->cr;
 
-	/* Background, with a one-pixel green line along the top edge. */
-	cairo_set_source_rgb(cr, HUD_BLACK);
-	cairo_paint(cr);
-	cairo_set_source_rgb(cr, HUD_DIM);
-	cairo_rectangle(cr, 0, 0, dock->width, 1);
-	cairo_fill(cr);
-
+	draw_panel(dock->buffer);
 	cairo_select_font_face(cr, UI_FONT, CAIRO_FONT_SLANT_NORMAL,
 		CAIRO_FONT_WEIGHT_NORMAL);
-	cairo_set_font_size(cr, FONT_SIZE(13));
-	cairo_set_line_width(cr, HUD_LINE);
-
-	/* Buttons: an outline with the label inside, like the soft keys round
-	 * a cockpit display. The one under the pointer is drawn in inverse
-	 * video (solid green, dark text). */
-	int top = (DOCK_HEIGHT - BUTTON_HEIGHT) / 2;
 	for (int i = 0; i < BUTTON_COUNT; i++) {
-		/* The half-pixel offset centres a 1.5 px line on the pixel grid,
-		 * which keeps straight edges crisp. */
-		rounded_rect(cr, button_x(i) + 0.5, top + 0.5,
-			BUTTON_WIDTH - 1, BUTTON_HEIGHT - 1, 3);
-		if (i == dock->hover) {
-			cairo_set_source_rgb(cr, HUD_GREEN);
-			cairo_fill(cr);
-			cairo_set_source_rgb(cr, HUD_BLACK);
-		} else {
-			cairo_set_source_rgb(cr, HUD_PANEL);
-			cairo_fill_preserve(cr);
-			/* The launcher button gets the bright outline. */
-			if (i == 0) {
-				cairo_set_source_rgb(cr, HUD_GREEN);
-			} else {
-				cairo_set_source_rgb(cr, HUD_DIM);
-			}
-			cairo_stroke(cr);
-			cairo_set_source_rgb(cr, HUD_GREEN);
-		}
-		/* Cut a long name short so it stays inside its button. */
-		char label[14];
-		snprintf(label, sizeof(label), "%.13s", button_label(i));
-		draw_text(cr, label,
-			button_x(i) + (BUTTON_WIDTH - text_width(cr, label)) / 2,
-			DOCK_HEIGHT / 2.0);
+		draw_button(cr, i, i == dock->hover, i == dock->pressed);
 	}
-
-	/* Clock, right-aligned. The VM's clock runs on UTC, which aviation
-	 * writes with a Z ("Zulu time"). */
-	char clock_text[16];
-	time_t now = time(NULL);
-	strftime(clock_text, sizeof(clock_text), "%H:%MZ", gmtime(&now));
-	cairo_set_source_rgb(cr, HUD_GREEN);
-	draw_text(cr, clock_text,
-		dock->width - text_width(cr, clock_text) - 16, DOCK_HEIGHT / 2.0);
+	draw_clock(cr, dock->width);
 
 	/* Make sure cairo has written everything to the shared memory. */
 	cairo_surface_flush(dock->buffer->cairo_surface);
@@ -209,7 +311,12 @@ static void pointer_enter(void *data, struct wl_pointer *pointer,
 
 static void pointer_leave(void *data, struct wl_pointer *pointer,
 		uint32_t serial, struct wl_surface *surface) {
-	set_hover(data, -1);
+	/* Forget a held button too: if what it opened took the pointer, we may
+	 * never hear that it was let go. */
+	struct dock *dock = data;
+	dock->pressed = -1;
+	dock->hover = -1;
+	draw(dock);
 }
 
 static void pointer_motion(void *data, struct wl_pointer *pointer,
@@ -220,10 +327,16 @@ static void pointer_motion(void *data, struct wl_pointer *pointer,
 static void pointer_button(void *data, struct wl_pointer *pointer,
 		uint32_t serial, uint32_t time, uint32_t button, uint32_t state) {
 	struct dock *dock = data;
-	/* Act on press of the left button over a button. */
-	if (button == BTN_LEFT && state == WL_POINTER_BUTTON_STATE_PRESSED &&
-			dock->hover >= 0) {
-		spawn(button_command(dock->hover));
+	if (button != BTN_LEFT) {
+		return;
+	}
+	/* Act on press of the left button over a button, which stays down
+	 * until the mouse button is let go. */
+	bool down = state == WL_POINTER_BUTTON_STATE_PRESSED;
+	dock->pressed = down ? dock->hover : -1;
+	draw(dock);
+	if (dock->pressed >= 0) {
+		spawn(button_command(dock->pressed));
 	}
 }
 
@@ -289,7 +402,7 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 int main(void) {
-	struct dock dock = { .hover = -1, .running = true };
+	struct dock dock = { .hover = -1, .pressed = -1, .running = true };
 	apps_load_pinned(&pinned);
 
 	/* NULL: connect to the compositor named by $WAYLAND_DISPLAY. */

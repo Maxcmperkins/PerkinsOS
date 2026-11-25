@@ -12,8 +12,7 @@ Version 1.0 is: PerkinsOS is installed on my laptop, I use it every day for a mo
 
 - Runs in QEMU two ways: the Buildroot image (`make run`) and on Ubuntu 26.04 (`distro/vm.sh`).
 - On Ubuntu: the launcher lists installed apps, and Firefox starts from it and loads a page.
-- Everything is drawn on the CPU. It has never run on real hardware.
-- A lot of work is not committed, and CI has not run since week 8.
+- Drawn on the CPU, or on the graphics card where there is a real one (M2). It has never run on real hardware.
 
 ## Sizes
 
@@ -35,6 +34,8 @@ Nothing new; make what exists safe.
 
 **Status, 17 November 2026:** committed and pushed, CI passes, and both aircraft models' licences are recorded in the README. Still to do, both by Max: make KVM permanent, and bring `CLAUDE.md` up to date.
 
+**25 November 2026:** KVM works after a WSL restart (`/etc/wsl.conf`), and `CLAUDE.md` has a draft update for Max to check.
+
 ### M1. An hour in the VM without ssh (M)
 
 Everything a normal sitting needs, in the Ubuntu VM, using only the keyboard and mouse.
@@ -49,6 +50,10 @@ Everything a normal sitting needs, in the Ubuntu VM, using only the keyboard and
 
 **Status (17 Nov 2026), slice 1 done:** Alt+Tab; Alt+left-drag moves and Alt+right-drag resizes a window; SHUT DOWN and RESTART in the launcher; Noto fonts; `xdg-desktop-portal` with the GTK backend, started through `perkinsos-session.target`, and a portal file dialog opens on the desktop in the VM. Next: title bars with a close button, minimise, launcher clicks and key repeat, and moving "quit the compositor" off Alt+Escape.
 
+**Slice 2 (19 Nov 2026):** title bars. The compositor speaks `xdg-decoration` and draws the title bar for every app that does too (foot, Qt apps): drag it to move the window, click its X to close it. Apps that do not speak it (GTK: Thunar, Firefox's tab strip) keep their own, so no window has two. Tested in CI (closing with the X, dragging the bar) and by hand in the Ubuntu VM. Then minimise: a button on the bar (or the app's own, for GTK apps) hides the window, and Alt+Tab brings it back; tested in CI. Next: the window's name in the bar (needs cairo in the compositor), launcher clicks and key repeat, and quit off Alt+Escape.
+
+**Slice 3 (24 Nov 2026):** the window's name in the title bar (drawn with cairo, shortened to fit); a click starts a launcher result, and held keys repeat there; foot's duplicate entries are gone from the launcher; quitting is Alt+Shift+Escape. All tested in CI's desktop test. The "done when" steps were driven in the Ubuntu VM with injected keys: Firefox downloaded a text file from a server on the host, `xdg-open` in a terminal opened it in Mousepad, and the launcher shut the VM down. Then fullscreen: the focused fullscreen window covers the dock, the launcher still opens over it, and switching to another window shows the dock again; tested in CI, and in the Ubuntu VM with Firefox, by F11 and by a web page asking for it as video players do. Copy and paste between Firefox and the terminal works both ways in the VM (accents, the euro sign, Japanese and two-line text). Still to do: Max doing an hour of it by hand. Known limits: middle-click paste (the primary selection) isn't supported; the title bar's font, VT323, has no letters for many scripts.
+
 ### M2. Draw with the graphics card (L)
 
 The biggest technical change. Today wlroots' pixman renderer draws every frame on the CPU.
@@ -59,6 +64,8 @@ The biggest technical change. Today wlroots' pixman renderer draws every frame o
 - Keep the pixman path working: CI has no graphics card.
 
 **Done when:** the desktop runs at the screen's refresh rate in the VM with the graphics card, and the Buildroot tests still pass on the CPU.
+
+**Status (22 Nov 2026), first step:** `GPU=1 distro/vm.sh start` gives the VM a virgl card (`virtio-vga-gl`), and `perkinsos-start` picks wlroots' GLES renderer whenever there is a real GPU: a render node that is not a VM's plain virtio card (that one only offers OpenGL on the CPU, slower than pixman). Tested in the VM: with `GPU=1` the compositor runs on GLES through virgl; without it, on pixman as before. The compositor now follows a screen whose preferred mode changes (wlroots only reads modes at plug-in, so it asks the kernel on each hotplug event and switches), so in GPU mode, where QEMU sizes the VM's screen to its window, dragging the window resizes the desktop; tested from 640x480 to 1280x800 and down to 1024x768. Still to do: GPU mode starts at 640x480 until the window is resized; screenshots of a GL screen come out black; and none of it is measured yet, because without KVM the VM's CPU is emulated and that, not drawing, is the bottleneck.
 
 ### M3. A proper session (M)
 
@@ -73,7 +80,14 @@ The services every desktop app assumes are there.
 
 **Done when:** I lock and unlock the screen, a notification appears, a video plays with sound, and an X11-only app opens.
 
-**Status (18 Nov 2026), on Ubuntu:** notifications (mako, in the HUD's colours), sound (PipeWire; the test VM has a sound card that plays through Windows), the keyring, and password prompts (MATE's polkit agent; GNOME's crashes without X) all work, started by `perkinsos-session.target`. The XWayland server is installed, waiting for the compositor side. Still to do, all needing compositor code: XWayland itself, the lock screen (`ext-session-lock`), and volume keys. Then the login screen.
+**Status (18 Nov 2026), on Ubuntu:** notifications (mako, in the HUD's colours), sound (PipeWire; the test VM has a sound card that plays through Windows), the keyring, and password prompts (MATE's polkit agent; GNOME's crashes without X) all work, started by `perkinsos-session.target`. The XWayland server is installed, waiting for the compositor side. Still to do, all needing compositor code: XWayland itself, the lock screen (`ext-session-lock`), and volume keys.
+
+**Login screen (19 Nov 2026), on Ubuntu:** greetd with tuigreet in the HUD's greens (`distro/greetd.toml`, installed by `sudo make -C distro install-login`). Tested in the VM: it boots to the desktop, quitting the desktop shows the login screen, and logging in with a password starts the desktop again. Opening downloads also works now: pictures, PDFs, text and zip files open in light GTK apps (Ristretto, Atril, Mousepad, Xarchiver), and links in Firefox (`distro/apps.sh`).
+
+**Around the compositor (25 Nov 2026), on Ubuntu:** ready for compositor code to use:
+
+- *Locking:* `perkinsos-lock` (swaylock in the HUD's colours) and `perkinsos-idle.service` (swayidle: after 5 minutes, and before sleep). Skipped until the compositor offers `ext-session-lock` and `ext-idle-notify`. `distro/test-lock.sh` runs in CI and skips itself until then; `STRICT=1` makes it fail. Plain Sway passes it, so a failure is ours.
+- *Volume and brightness:* `perkinsos-volume up|down|mute|mic-mute` and `perkinsos-brightness up|down`, for key bindings. Volume is tested in the VM; brightness is not (a VM has no backlight).
 
 ### M4. Boot the laptop from a USB stick (L)
 
@@ -88,6 +102,10 @@ Stage 2 of the plan. First contact with real hardware: MSI Prestige 14 AI Studio
 
 **Done when:** the laptop boots from the USB to the cockpit, joins my wifi, and Firefox loads a page.
 
+**Status (19 Nov 2026), the image:** `distro/usb.sh build` makes `output/usb/perkinsos-usb.img`, 24 GB, for a 32 GB stick: Ubuntu 26.04 with the desktop, the full kernel, firmware for the Arc graphics and BE200 wifi, NetworkManager and Firefox. No automatic login, no ssh, and sudo asks for the password (`perkinsos`: change it with `passwd` after the first login; greetd cannot force the change). `distro/usb.sh test` boots it in QEMU through UEFI with nothing else helping: it reaches the login screen, logs in to the cockpit, and NetworkManager is connected. Next: write it to a stick (Rufus or balenaEtcher, "DD image") and boot the laptop. Wifi, the touchpad and the screen are untested until then.
+
+**25 Nov 2026:** the image now keeps the NVIDIA drivers from loading. `perkinsos-report` writes what the machine is and what works to one file. The image was rebuilt and boots in QEMU; that build does not have the report, theme or crash recovery yet, so build again before writing it to a stick.
+
 ### M5. Install it beside Windows (M)
 
 Stage 3.
@@ -98,6 +116,8 @@ Stage 3.
 - Bluetooth, webcam, microphone.
 
 **Done when:** the boot menu offers Windows and PerkinsOS, both start, and the laptop sleeps and wakes.
+
+**Status (22 Nov 2026), the package:** `make -C distro deb` builds `perkinsos_VERSION_amd64.deb`, installing into `/usr`. Its library dependencies are worked out from the programs (`dpkg-shlibdeps`); foot and a font are required, the session services (notifications, sound, keyring, portals, XWayland) recommended. The version is the last commit's time and hash, so a newer build upgrades an older one. foot's colours moved out of `/etc/xdg/foot`, which belongs to the foot package, to `/usr/share/perkinsos/xdg`, found through `XDG_CONFIG_DIRS`. The test VM now installs this way, and CI builds the package and installs it with apt in a clean container. The login screen is still a separate `make install-login`: it replaces greetd's own config file, which a package may only do with `dpkg-divert`.
 
 ### M6. Survive a working day (L)
 
@@ -110,6 +130,10 @@ Stage 4. Fix what stops me, most painful first. Expected:
 - Battery life within reach of Windows.
 
 **Done when:** one full day of my normal use without booting Windows.
+
+**25 Nov 2026, crash recovery:** `perkinsos-start` restarts the desktop after a crash, keeps the last five logs (`~/.local/state/perkinsos-desktop.log.1` to `.5`), and goes back to the login screen after three quick crashes. Open apps are still lost. Tested in the VM by killing the compositor.
+
+**Look:** GTK apps, file icons and the mouse cursor match the HUD (`distro/theme/`), only in a PerkinsOS session. `make -C distro install-splash` adds a radar boot splash.
 
 ### M7. A month, then 1.0 (M)
 

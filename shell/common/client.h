@@ -49,4 +49,7 @@ void draw_text(cairo_t *cr, const char *text, double x, double y_centre);
 /* Width in pixels that draw_text() would use for this text. */
 double text_width(cairo_t *cr, const char *text);
 
+/* Copy a name, cut to `most` characters with ".." if it is longer. */
+void shorten_name(const char *name, int most, char *out, size_t size);
+
 #endif

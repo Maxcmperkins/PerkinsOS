@@ -1,0 +1,15 @@
+Package: perkinsos
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Max Perkins
+Installed-Size: @SIZE@
+Depends: @DEPENDS@, foot, fonts-dejavu-core
+Recommends: fonts-noto-core, fonts-noto-cjk, fonts-noto-color-emoji, xdg-desktop-portal, xdg-desktop-portal-gtk, xwayland, mako-notifier, libnotify-bin, pipewire-audio, wireplumber, gnome-keyring, libsecret-tools, mate-polkit, pkexec, gsettings-desktop-schemas, adwaita-icon-theme, librsvg2-common, swaylock, swayidle, wayland-utils, brightnessctl, python3
+Suggests: pavucontrol, plymouth, plymouth-label, greetd, tuigreet
+Section: x11
+Priority: optional
+Description: cockpit-styled Wayland desktop
+ PerkinsOS is a desktop for one laptop: a Wayland compositor forked from
+ TinyWL (wlroots 0.19), with a fighter-cockpit wallpaper, a dock and an
+ app launcher. Start it with perkinsos-start from a console login, or
+ from a login manager such as greetd.

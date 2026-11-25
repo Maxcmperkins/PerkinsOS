@@ -1,0 +1,6 @@
+# The compositor asks wlroots for the cursor theme called "default".
+# perkinsos-start puts this folder first in XCURSOR_PATH, so on PerkinsOS
+# (and only there) "default" means our cursors.
+[Icon Theme]
+Name=Default
+Inherits=PerkinsOS

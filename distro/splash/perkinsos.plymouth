@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=PerkinsOS
+Description=A radar sweep, before the cockpit powers up
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/perkinsos
+ScriptFile=/usr/share/plymouth/themes/perkinsos/perkinsos.script

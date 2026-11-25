@@ -5,11 +5,14 @@
 #
 #   make -C distro                 build into distro/build/
 #   sudo make -C distro install    install into /usr/local
+#   make -C distro deb             or build a package, which installs into
+#                                  /usr (docs/ROADMAP.md, M5):
+#   sudo apt install ./distro/build/deb/perkinsos_*.deb
 #   make -C distro clean
 #
 # Packages needed, by their Ubuntu 26.04 names:
 #   build-essential pkg-config libwlroots-0.19-dev libwayland-dev
-#   wayland-protocols libxkbcommon-dev libcairo2-dev
+#   wayland-protocols libxkbcommon-dev libcairo2-dev (shell and compositor)
 # and to run it: foot (the terminal) and fonts-dejavu-core. For apps to be
 # usable: fonts-noto-* (other scripts, emoji) and xdg-desktop-portal with
 # xdg-desktop-portal-gtk (file open and save dialogs for sandboxed apps).
@@ -19,7 +22,11 @@
 # The session's services (docs/ROADMAP.md, M3): mako-notifier and
 # libnotify-bin (notifications), pipewire-audio, wireplumber and pavucontrol
 # (sound), gnome-keyring and libsecret-tools (saved passwords), and
-# mate-polkit and pkexec (password prompts).
+# mate-polkit and pkexec (password prompts). The login screen
+# (install-login): greetd and tuigreet. Building also needs python3 (it draws
+# the cursors, icons and splash). The lock screen: swaylock, swayidle and
+# wayland-utils. The brightness keys: brightnessctl. The boot splash
+# (install-splash): plymouth, and plymouth-label for its password question.
 
 PREFIX ?= /usr/local
 PKG_CONFIG ?= pkg-config
@@ -48,9 +55,17 @@ SHELL_LIBS := $(shell $(PKG_CONFIG) --libs $(SHELL_PKGS)) -lm
 SHELL_PROTOCOLS := $(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml \
 	$(WLR_PROTOCOLS)/wlr-layer-shell-unstable-v1.xml
 
-.PHONY: all compositor shell install clean
+.PHONY: all compositor shell theme install install-login install-splash \
+	deb version clean
 
-all: compositor shell
+all: compositor shell theme
+
+# Pictures drawn by scripts, so that no artwork is kept in the repo.
+theme:
+	rm -rf $(BUILD)/theme $(BUILD)/splash
+	python3 theme/make-cursors.py $(BUILD)/theme/cursors
+	python3 theme/make-icons.py $(BUILD)/theme
+	python3 splash/make-images.py $(BUILD)/splash
 
 # The compositor has its own Makefile (it came with TinyWL). It writes its
 # output next to its source, so build a copy and keep compositor/ clean.
@@ -84,10 +99,17 @@ install:
 		install -D -m 0755 $(BUILD)/perkinsos-$$name $(DESTDIR)$(PREFIX)/bin/perkinsos-$$name || exit 1; \
 	done
 	install -D -m 0755 $(OVERLAY)/usr/bin/perkinsos-session $(DESTDIR)$(PREFIX)/bin/perkinsos-session
-	install -D -m 0755 perkinsos-start $(DESTDIR)$(PREFIX)/bin/perkinsos-start
+	for name in start report lock volume brightness weather; do \
+		sed 's|@PREFIX@|$(PREFIX)|g' perkinsos-$$name > $(BUILD)/script || exit 1; \
+		install -D -m 0755 $(BUILD)/script $(DESTDIR)$(PREFIX)/bin/perkinsos-$$name || exit 1; \
+	done
 	install -d $(DESTDIR)$(PREFIX)/share/perkinsos/models
 	install -m 0644 $(OVERLAY)/usr/share/perkinsos/models/*.mesh $(DESTDIR)$(PREFIX)/share/perkinsos/models/
-	install -D -m 0644 $(OVERLAY)/etc/xdg/foot/foot.ini $(DESTDIR)/etc/xdg/foot/foot.ini
+	# The terminal's colours. Not in /etc/xdg/foot: that file belongs to
+	# the foot package. perkinsos-start adds this folder to the places
+	# programs look for settings (XDG_CONFIG_DIRS).
+	install -D -m 0644 $(OVERLAY)/etc/xdg/foot/foot.ini \
+		$(DESTDIR)$(PREFIX)/share/perkinsos/xdg/foot/foot.ini
 	# The pixel font VT323 and its licence; fc-cache tells fontconfig, the
 	# library apps ask for fonts, that it is there.
 	install -D -m 0644 $(OVERLAY)/usr/share/fonts/vt323/VT323-Regular.ttf \
@@ -106,6 +128,90 @@ install:
 	mkdir -p $(DESTDIR)$(PREFIX)/lib/systemd/user/mako.service.d
 	sed 's|@PREFIX@|$(PREFIX)|' mako-perkinsos.conf \
 		> $(DESTDIR)$(PREFIX)/lib/systemd/user/mako.service.d/perkinsos.conf
+	for unit in idle.service weather.service weather.timer; do \
+		sed 's|@PREFIX@|$(PREFIX)|g' perkinsos-$$unit \
+			> $(DESTDIR)$(PREFIX)/lib/systemd/user/perkinsos-$$unit || exit 1; \
+	done
+	install -D -m 0644 swaylock.config $(DESTDIR)$(PREFIX)/share/perkinsos/swaylock.config
+	# The look of apps (theme/): icons and cursors, the GTK theme, and the
+	# settings that choose them. The package leaves compiling the settings
+	# to dpkg, which does it for any package that adds some.
+	mkdir -p $(DESTDIR)$(PREFIX)/share/icons/PerkinsOS
+	cp -a $(BUILD)/theme/cursors $(BUILD)/theme/scalable $(DESTDIR)$(PREFIX)/share/icons/PerkinsOS/
+	install -m 0644 theme/index.theme $(DESTDIR)$(PREFIX)/share/icons/PerkinsOS/
+	install -D -m 0644 theme/default.theme \
+		$(DESTDIR)$(PREFIX)/share/perkinsos/icons/default/index.theme
+	install -D -m 0644 theme/gtk-common.css $(DESTDIR)$(PREFIX)/share/themes/PerkinsOS/gtk-common.css
+	for v in 3 4; do \
+		install -D -m 0644 theme/gtk-$$v.css \
+			$(DESTDIR)$(PREFIX)/share/themes/PerkinsOS/gtk-$$v.0/gtk.css || exit 1; \
+	done
+	install -D -m 0644 theme/perkinsos.gschema.override \
+		$(DESTDIR)$(PREFIX)/share/glib-2.0/schemas/90_perkinsos.gschema.override
+	[ -n "$(DESTDIR)" ] || ! command -v glib-compile-schemas > /dev/null || \
+		glib-compile-schemas $(PREFIX)/share/glib-2.0/schemas
+
+# The login screen: greetd with tuigreet (greetd.toml says how). Separate
+# from `install` because it replaces the machine's login: afterwards the
+# machine boots to the PerkinsOS login, not to the console or another
+# desktop's login screen. Needs the packages greetd and tuigreet.
+install-login:
+	mkdir -p $(BUILD)
+	sed 's|@PREFIX@|$(PREFIX)|' greetd.toml > $(BUILD)/greetd.toml
+	install -D -m 0644 $(BUILD)/greetd.toml $(DESTDIR)/etc/greetd/config.toml
+	[ -n "$(DESTDIR)" ] || systemctl enable --force greetd.service
+
+# The boot splash (splash/). Separate, like the login screen: it changes how
+# the machine boots. ignore-serial-consoles: Ubuntu's cloud image also sends
+# its console to a serial port, where Plymouth would otherwise fall back to
+# text. To undo: remove the grub.d file, then update-grub.
+SPLASH := /usr/share/plymouth/themes/perkinsos
+install-splash:
+	install -d $(DESTDIR)$(SPLASH)
+	install -m 0644 splash/perkinsos.plymouth splash/perkinsos.script \
+		$(BUILD)/splash/*.png $(DESTDIR)$(SPLASH)/
+	install -D -m 0644 splash/grub.cfg $(DESTDIR)/etc/default/grub.d/90-perkinsos-splash.cfg
+	[ -n "$(DESTDIR)" ] || { \
+		update-alternatives --install /usr/share/plymouth/themes/default.plymouth \
+			default.plymouth $(SPLASH)/perkinsos.plymouth 200 && \
+		update-initramfs -u && update-grub; }
+
+# The package. It is built from scratch in build/deb/ with PREFIX=/usr,
+# where a distro's own packages go (/usr/local is for things installed by
+# hand, which apt does not manage). Then three steps:
+#   - dpkg-shlibdeps reads which libraries the programs link to and names
+#     the packages that provide them, at the versions they were built with;
+#   - deb/control.in gets the version, size and those packages filled in;
+#   - dpkg-deb packs the folder. --root-owner-group: the files belong to
+#     root once installed, whoever built the package.
+# VERSION: 0~ (lower than any real release, so a 1.0 will replace it), the
+# time of the last commit (so a newer build is a higher version, and apt
+# upgrades to it) and its hash. vm.sh passes it in: its copy has no .git.
+VERSION ?= 0~$(or $(shell git -C $(TOP) log -1 --date=format:%Y%m%d.%H%M --format=%cd+g%h 2>/dev/null),local)
+DEB := $(BUILD)/deb
+DEB_ROOT := $(DEB)/root
+ELF_PROGRAMS = $(DEB_ROOT)/usr/bin/perkinsos-compositor \
+	$(foreach name,$(SHELL_PROGRAMS),$(DEB_ROOT)/usr/bin/perkinsos-$(name))
+deb:
+	rm -rf $(DEB)
+	$(MAKE) BUILD=$(DEB)/build PREFIX=/usr all
+	$(MAKE) BUILD=$(DEB)/build PREFIX=/usr DESTDIR=$(DEB_ROOT) install
+	# dpkg-shlibdeps only runs inside a source package; a stub is enough.
+	mkdir -p $(DEB)/debian
+	printf 'Source: perkinsos\n\nPackage: perkinsos\nArchitecture: any\n' \
+		> $(DEB)/debian/control
+	cd $(DEB) && dpkg-shlibdeps -O $(ELF_PROGRAMS) > shlibs
+	mkdir -p $(DEB_ROOT)/DEBIAN
+	sed -e 's|@VERSION@|$(VERSION)|' \
+		-e "s|@ARCH@|$$(dpkg --print-architecture)|" \
+		-e "s|@SIZE@|$$(du -sk $(DEB_ROOT) | cut -f1)|" \
+		-e "s|@DEPENDS@|$$(sed -n 's/^shlibs:Depends=//p' $(DEB)/shlibs)|" \
+		deb/control.in > $(DEB_ROOT)/DEBIAN/control
+	dpkg-deb --root-owner-group --build $(DEB_ROOT) $(DEB)
+	@ls $(DEB)/*.deb
+
+version:
+	@echo $(VERSION)
 
 clean:
 	rm -rf $(BUILD)

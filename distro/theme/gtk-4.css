@@ -1,0 +1,4 @@
+/* GTK 4. Apps made with libadwaita ignore GTK themes: they only follow the
+ * dark setting. See gtk-common.css. */
+@import url("resource:///org/gtk/libgtk/theme/Default/Default-dark.css");
+@import url("../gtk-common.css");

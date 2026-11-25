@@ -1,14 +1,20 @@
 #include <assert.h>
+#include <cairo.h> /* PerkinsOS: the text in title bars */
+#include <drm_fourcc.h> /* PerkinsOS: names of pixel formats */
 #include <getopt.h>
 #include <linux/input-event-codes.h> /* PerkinsOS: BTN_LEFT, BTN_RIGHT */
 #include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
 #include <wlr/backend.h>
+#include <wlr/backend/drm.h>
+#include <wlr/backend/session.h>
+#include <wlr/interfaces/wlr_buffer.h>
 #include <wlr/render/allocator.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_cursor.h>
@@ -24,8 +30,10 @@
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xcursor_manager.h>
+#include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
 #include <wlr/util/log.h>
+#include <xf86drmMode.h> /* PerkinsOS: reading a screen's modes */
 #include <xkbcommon/xkbcommon.h>
 
 /*
@@ -40,6 +48,23 @@
 static const float wallpaper_color[4] = {0.005f, 0.025f, 0.012f, 1.0f};
 static const float border_focused[4] = {0.20f, 1.00f, 0.40f, 1.0f};
 static const float border_unfocused[4] = {0.06f, 0.30f, 0.13f, 1.0f};
+/* PerkinsOS: server-side title bars (toplevel_update_titlebar()). The
+ * close button's X is CLOSE_X_STEPS squares of CLOSE_PIXEL on each
+ * diagonal: blocky, like the VT323 font the shell uses. The X takes the
+ * border's colour, so it is bright on the focused window only. */
+#define TITLE_HEIGHT 24
+#define CLOSE_SIZE 16
+#define CLOSE_PIXEL 2
+#define CLOSE_X_STEPS 5
+/* The window's name on its title bar: the shell's font, and the gap kept
+ * clear at each end of the text. */
+#define TITLE_FONT "VT323"
+#define TITLE_FONT_SIZE 18
+#define TITLE_PADDING 8
+static const float title_focused[4] = {0.03f, 0.16f, 0.07f, 1.0f};
+static const float title_unfocused[4] = {0.02f, 0.07f, 0.04f, 1.0f};
+static const float fullscreen_backdrop[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+static const float close_background[4] = {0.05f, 0.24f, 0.11f, 1.0f};
 
 /* For brevity's sake, struct members are annotated where they are used. */
 enum tinywl_cursor_mode {
@@ -48,9 +73,22 @@ enum tinywl_cursor_mode {
 	TINYWL_CURSOR_RESIZE,
 };
 
+/* PerkinsOS: the parts of one of our title bars (see titlebar_at()). */
+enum titlebar_part {
+	TITLEBAR_NONE,
+	TITLEBAR_BAR,
+	TITLEBAR_MINIMIZE,
+	TITLEBAR_CLOSE,
+};
+
 struct tinywl_server {
 	struct wl_display *wl_display;
 	struct wlr_backend *backend;
+	/* PerkinsOS: the login session wlroots opened the hardware through
+	 * (NULL when nested in another desktop), and the graphics cards in
+	 * it we watch for screens changing size (tinywl_gpu). */
+	struct wlr_session *session;
+	struct wl_list gpus;
 	struct wlr_renderer *renderer;
 	struct wlr_allocator *allocator;
 	struct wlr_scene *scene;
@@ -63,9 +101,13 @@ struct tinywl_server {
 	 * layer_trees holds the four layers of the layer-shell protocol,
 	 * indexed by the protocol's own numbers: background (0), bottom (1),
 	 * top (2), overlay (3). Front to back the whole stack is:
-	 *   overlay, top, windows, bottom, background, wallpaper */
+	 *   overlay, fullscreen, top, windows, bottom, background, wallpaper */
 	struct wlr_scene_tree *wallpaper_tree;
 	struct wlr_scene_tree *window_tree;
+	/* Holds the focused window while it is fullscreen, and nothing else.
+	 * It sits between the top layer (so it covers the dock) and the
+	 * overlay (so the launcher still opens over it). */
+	struct wlr_scene_tree *fullscreen_tree;
 	struct wlr_scene_tree *layer_trees[4];
 
 	/* PerkinsOS: layer-shell, the protocol docks and launchers use. */
@@ -73,6 +115,17 @@ struct tinywl_server {
 	struct wl_listener new_layer_surface;
 	/* The layer surface that currently holds the keyboard, if any. */
 	struct tinywl_layer_surface *focused_layer;
+
+	/* PerkinsOS: xdg-decoration, the protocol a window and the compositor
+	 * use to agree on who draws its title bar. */
+	struct wlr_xdg_decoration_manager_v1 *decoration_manager;
+	struct wl_listener new_decoration;
+	/* The window whose close or minimise button the left button went
+	 * down on (NULL if none), and which of the two. The button acts only
+	 * if the mouse button also comes up on it, so you can change your
+	 * mind by sliding off before letting go. */
+	struct tinywl_toplevel *button_pressed;
+	enum titlebar_part pressed_part;
 
 	struct wlr_xdg_shell *xdg_shell;
 	struct wl_listener new_xdg_toplevel;
@@ -97,20 +150,31 @@ struct tinywl_server {
 	double grab_x, grab_y;
 	struct wlr_box grab_geobox;
 	uint32_t resize_edges;
-	/* PerkinsOS: the mouse button that started an Alt+drag, or 0. Its
-	 * press was not passed on to the window, so its release must not be
-	 * either. */
-	uint32_t alt_drag_button;
+	/* PerkinsOS: the mouse button that started a move or resize of ours
+	 * (Alt+drag, or dragging our title bar), or 0. Its press was not
+	 * passed on to the window, so its release must not be either. */
+	uint32_t grab_button;
 
 	struct wlr_output_layout *output_layout;
 	struct wl_list outputs;
 	struct wl_listener new_output;
 };
 
+/* PerkinsOS: a graphics card, watched for "hotplug" events: a screen
+ * plugged in or out, or one whose modes changed. */
+struct tinywl_gpu {
+	struct wl_list link; /* tinywl_server.gpus */
+	struct tinywl_server *server;
+	struct wl_listener change;
+	struct wl_listener remove;
+};
+
 struct tinywl_output {
 	struct wl_list link;
 	struct tinywl_server *server;
 	struct wlr_output *wlr_output;
+	/* PerkinsOS: every commit to this screen, to catch a new size. */
+	struct wl_listener commit;
 	/* PerkinsOS: a filled rectangle the size of this screen. */
 	struct wlr_scene_rect *wallpaper;
 	/* PerkinsOS: the layer surfaces shown on this screen, and the part of
@@ -131,9 +195,39 @@ struct tinywl_toplevel {
 	/* PerkinsOS: four thin rectangles around the window: top, bottom,
 	 * left, right. They are children of scene_tree, so they move with it. */
 	struct wlr_scene_rect *border[4];
-	/* PerkinsOS: maximize state, and where to put the window back. */
-	bool maximized;
+	/* PerkinsOS: the title bar, drawn by us for windows whose client
+	 * speaks xdg-decoration (decoration is then set). Its nodes are
+	 * children of scene_tree, sitting just above the window: titlebar
+	 * holds the bar's background and the close button, and the close
+	 * button holds its own background and the squares of its X. */
+	struct wlr_xdg_toplevel_decoration_v1 *decoration;
+	struct wlr_scene_tree *titlebar;
+	struct wlr_scene_rect *titlebar_background;
+	/* The window's name: a picture drawn by toplevel_update_title(), and
+	 * what it was drawn for, so it is only redrawn when that changes. */
+	struct wlr_scene_buffer *title;
+	int title_width;
+	bool title_changed;
+	bool focused_look;
+	struct wl_listener set_title;
+	struct wlr_scene_tree *close_button;
+	struct wlr_scene_rect *close_x[2 * CLOSE_X_STEPS];
+	struct wlr_scene_tree *minimize_button;
+	struct wlr_scene_rect *minimize_line;
+	struct wl_listener decoration_request_mode;
+	struct wl_listener decoration_destroy;
+	/* PerkinsOS: maximized and fullscreen can both be set: a maximized
+	 * window that goes fullscreen is maximized again afterwards. restore
+	 * is where the window goes once neither is. */
+	bool maximized, fullscreen;
+	/* Black behind a fullscreen window, the size of the screen, in case
+	 * the app draws itself smaller than that. */
+	struct wlr_scene_rect *backdrop;
 	struct wlr_box restore;
+	/* PerkinsOS: hidden by minimise. The window stays in the toplevels
+	 * list (at the back) and its app keeps running; focusing it again,
+	 * with Alt+Tab, shows it. */
+	bool minimized;
 	struct wl_listener map;
 	struct wl_listener unmap;
 	struct wl_listener commit;
@@ -141,6 +235,7 @@ struct tinywl_toplevel {
 	struct wl_listener request_move;
 	struct wl_listener request_resize;
 	struct wl_listener request_maximize;
+	struct wl_listener request_minimize;
 	struct wl_listener request_fullscreen;
 };
 
@@ -191,12 +286,191 @@ static void spawn(const char *command) {
 	}
 }
 
-/* PerkinsOS: paint all four border rectangles of a window one colour. */
-static void toplevel_set_border_color(struct tinywl_toplevel *toplevel,
-		const float color[static 4]) {
-	for (int i = 0; i < 4; i++) {
-		wlr_scene_rect_set_color(toplevel->border[i], color);
+/* PerkinsOS: a block of pixels that cairo draws into and wlroots shows.
+ * wlroots only knows its own wlr_buffer type; making one of our own means
+ * putting a wlr_buffer inside our struct and giving it a table of
+ * functions (title_buffer_impl) that wlroots calls to get at the pixels. */
+struct title_buffer {
+	struct wlr_buffer base;
+	cairo_surface_t *surface;
+};
+
+/* Nobody needs the buffer any more: neither us (wlr_buffer_drop()) nor the
+ * scene (which locks it while it is on show). */
+static void title_buffer_destroy(struct wlr_buffer *wlr_buffer) {
+	struct title_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);
+	wlr_buffer_finish(wlr_buffer);
+	cairo_surface_destroy(buffer->surface);
+	free(buffer);
+}
+
+/* The renderer wants to read the pixels. cairo's ARGB32 and DRM's ARGB8888
+ * are the same layout, and both expect colours premultiplied by alpha. */
+static bool title_buffer_begin_access(struct wlr_buffer *wlr_buffer,
+		uint32_t flags, void **data, uint32_t *format, size_t *stride) {
+	struct title_buffer *buffer = wl_container_of(wlr_buffer, buffer, base);
+	if (flags & WLR_BUFFER_DATA_PTR_ACCESS_WRITE) {
+		return false;
 	}
+	*data = cairo_image_surface_get_data(buffer->surface);
+	*format = DRM_FORMAT_ARGB8888;
+	*stride = cairo_image_surface_get_stride(buffer->surface);
+	return true;
+}
+
+static void title_buffer_end_access(struct wlr_buffer *wlr_buffer) {
+	/* Nothing to undo: the pixels are ordinary memory. */
+}
+
+static const struct wlr_buffer_impl title_buffer_impl = {
+	.destroy = title_buffer_destroy,
+	.begin_data_ptr_access = title_buffer_begin_access,
+	.end_data_ptr_access = title_buffer_end_access,
+};
+
+/* PerkinsOS: clicks go through the name to the bar behind it, so the bar
+ * can be dragged by its text (see titlebar_at()). */
+static bool title_accepts_input(struct wlr_scene_buffer *buffer,
+		double *sx, double *sy) {
+	return false;
+}
+
+/* PerkinsOS: shorten text, in place, until it fits in width pixels,
+ * ending it with "...". There must be room for 4 more bytes after it. */
+static void shorten_to_fit(cairo_t *cr, char *text, double width) {
+	cairo_text_extents_t extents;
+	cairo_text_extents(cr, text, &extents);
+	size_t length = strlen(text);
+	while (extents.x_advance > width && length > 0) {
+		/* Drop one character. In UTF-8 that can be several bytes: all
+		 * but the first of them look like 10xxxxxx. */
+		do {
+			length--;
+		} while (length > 0 && ((unsigned char)text[length] & 0xC0) == 0x80);
+		strcpy(text + length, "...");
+		cairo_text_extents(cr, text, &extents);
+	}
+}
+
+/* PerkinsOS: draw the window's name, if it or the room for it changed.
+ * Text needs a font library, which wlroots does not have, so cairo draws
+ * it into a picture and the scene shows that. */
+static void toplevel_update_title(struct tinywl_toplevel *toplevel) {
+	if (!toplevel->title_changed) {
+		return;
+	}
+	toplevel->title_changed = false;
+	const char *title = toplevel->xdg_toplevel->title;
+	int width = toplevel->title_width;
+	if (title == NULL || title[0] == '\0' || width <= 0) {
+		wlr_scene_buffer_set_buffer(toplevel->title, NULL);
+		return;
+	}
+
+	struct title_buffer *buffer = calloc(1, sizeof(*buffer));
+	if (buffer == NULL) {
+		return;
+	}
+	/* A new image surface starts fully transparent: the bar shows through. */
+	buffer->surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32,
+		width, TITLE_HEIGHT);
+	if (cairo_surface_status(buffer->surface) != CAIRO_STATUS_SUCCESS) {
+		cairo_surface_destroy(buffer->surface);
+		free(buffer);
+		return;
+	}
+	wlr_buffer_init(&buffer->base, &title_buffer_impl, width, TITLE_HEIGHT);
+
+	cairo_t *cr = cairo_create(buffer->surface);
+	cairo_select_font_face(cr, TITLE_FONT, CAIRO_FONT_SLANT_NORMAL,
+		CAIRO_FONT_WEIGHT_NORMAL);
+	cairo_set_font_size(cr, TITLE_FONT_SIZE);
+	const float *color = toplevel->focused_look ?
+		border_focused : border_unfocused;
+	cairo_set_source_rgb(cr, color[0], color[1], color[2]);
+
+	/* A name can be any length; no screen shows more than this much. */
+	char text[512];
+	snprintf(text, sizeof(text) - 4, "%s", title);
+	/* If that cut a character in half, cairo would refuse the whole text. */
+	size_t length = strlen(text);
+	while (length > 0 && ((unsigned char)title[length] & 0xC0) == 0x80) {
+		length--;
+	}
+	text[length] = '\0';
+	shorten_to_fit(cr, text, width);
+	cairo_font_extents_t font;
+	cairo_font_extents(cr, &font);
+	cairo_move_to(cr, 0, (int)(TITLE_HEIGHT / 2.0 +
+		(font.ascent - font.descent) / 2));
+	cairo_show_text(cr, text);
+	cairo_destroy(cr);
+	cairo_surface_flush(buffer->surface);
+
+	wlr_scene_buffer_set_buffer(toplevel->title, &buffer->base);
+	/* The scene holds its own lock on the buffer; we are done with it. */
+	wlr_buffer_drop(&buffer->base);
+}
+
+/* PerkinsOS: colour a window's border and title bar for focused or not. */
+static void toplevel_set_focused_look(struct tinywl_toplevel *toplevel,
+		bool focused) {
+	const float *border = focused ? border_focused : border_unfocused;
+	for (int i = 0; i < 4; i++) {
+		wlr_scene_rect_set_color(toplevel->border[i], border);
+	}
+	wlr_scene_rect_set_color(toplevel->titlebar_background,
+		focused ? title_focused : title_unfocused);
+	for (int i = 0; i < 2 * CLOSE_X_STEPS; i++) {
+		wlr_scene_rect_set_color(toplevel->close_x[i], border);
+	}
+	wlr_scene_rect_set_color(toplevel->minimize_line, border);
+	if (toplevel->focused_look != focused) {
+		toplevel->focused_look = focused;
+		toplevel->title_changed = true;
+		toplevel_update_title(toplevel);
+	}
+}
+
+/* PerkinsOS: does this window get our title bar? Only if its client
+ * speaks xdg-decoration: we always tell those to leave the title bar to
+ * us (toplevel_use_server_side()). Others, like GTK apps, draw their own,
+ * and a second bar from us would sit on top of theirs. */
+static bool toplevel_has_titlebar(struct tinywl_toplevel *toplevel) {
+	return toplevel->decoration != NULL && !toplevel->fullscreen;
+}
+
+static int toplevel_titlebar_height(struct tinywl_toplevel *toplevel) {
+	return toplevel_has_titlebar(toplevel) ? TITLE_HEIGHT : 0;
+}
+
+/* PerkinsOS: fit the title bar to the window's width, close button at
+ * the right-hand end and minimise just left of it. Called from
+ * toplevel_update_borders(). */
+static void toplevel_update_titlebar(struct tinywl_toplevel *toplevel) {
+	bool show = toplevel_has_titlebar(toplevel);
+	wlr_scene_node_set_enabled(&toplevel->titlebar->node, show);
+	if (!show) {
+		return;
+	}
+	struct wlr_box *geo = &toplevel->xdg_toplevel->base->geometry;
+	wlr_scene_node_set_position(&toplevel->titlebar->node, 0, -TITLE_HEIGHT);
+	wlr_scene_rect_set_size(toplevel->titlebar_background,
+		geo->width, TITLE_HEIGHT);
+	const int margin = (TITLE_HEIGHT - CLOSE_SIZE) / 2;
+	wlr_scene_node_set_position(&toplevel->close_button->node,
+		geo->width - margin - CLOSE_SIZE, margin);
+	wlr_scene_node_set_position(&toplevel->minimize_button->node,
+		geo->width - 2 * (margin + CLOSE_SIZE), margin);
+	/* The name gets the room left of the buttons. */
+	wlr_scene_node_set_position(&toplevel->title->node, TITLE_PADDING, 0);
+	int title_width = geo->width - 2 * (margin + CLOSE_SIZE) -
+		2 * TITLE_PADDING;
+	if (title_width != toplevel->title_width) {
+		toplevel->title_width = title_width;
+		toplevel->title_changed = true;
+	}
+	toplevel_update_title(toplevel);
 }
 
 /* PerkinsOS: resize and reposition the border to hug the window. */
@@ -209,17 +483,39 @@ static void toplevel_update_borders(struct tinywl_toplevel *toplevel) {
 	if (geo->width <= 0 || geo->height <= 0) {
 		return; /* no size yet: the client hasn't drawn anything */
 	}
+	/* Fullscreen, the window is all there is: no border, no bar. */
+	for (int i = 0; i < 4; i++) {
+		wlr_scene_node_set_enabled(&toplevel->border[i]->node,
+			!toplevel->fullscreen);
+	}
 	const int bw = BORDER_WIDTH;
+	/* With a title bar, the border goes round the bar too: the top edge
+	 * moves up by the bar's height and the sides grow by it. */
+	const int th = toplevel_titlebar_height(toplevel);
 	/* top and bottom span the full width including the corners */
 	wlr_scene_rect_set_size(toplevel->border[0], geo->width + 2 * bw, bw);
-	wlr_scene_node_set_position(&toplevel->border[0]->node, -bw, -bw);
+	wlr_scene_node_set_position(&toplevel->border[0]->node, -bw, -th - bw);
 	wlr_scene_rect_set_size(toplevel->border[1], geo->width + 2 * bw, bw);
 	wlr_scene_node_set_position(&toplevel->border[1]->node, -bw, geo->height);
 	/* left and right fill the gap between them */
-	wlr_scene_rect_set_size(toplevel->border[2], bw, geo->height);
-	wlr_scene_node_set_position(&toplevel->border[2]->node, -bw, 0);
-	wlr_scene_rect_set_size(toplevel->border[3], bw, geo->height);
-	wlr_scene_node_set_position(&toplevel->border[3]->node, geo->width, 0);
+	wlr_scene_rect_set_size(toplevel->border[2], bw, th + geo->height);
+	wlr_scene_node_set_position(&toplevel->border[2]->node, -bw, -th);
+	wlr_scene_rect_set_size(toplevel->border[3], bw, th + geo->height);
+	wlr_scene_node_set_position(&toplevel->border[3]->node, geo->width, -th);
+	toplevel_update_titlebar(toplevel);
+}
+
+/* PerkinsOS: put a window in the part of the scene it belongs in. Only the
+ * focused window covers the dock; a fullscreen one you Alt+Tab away from
+ * goes back among the other windows, or it would hide the one you chose. */
+static void toplevel_update_tree(struct tinywl_toplevel *toplevel,
+		bool focused) {
+	struct wlr_scene_tree *tree = toplevel->fullscreen && focused ?
+		toplevel->server->fullscreen_tree : toplevel->server->window_tree;
+	if (toplevel->scene_tree->node.parent != tree) {
+		/* This also puts it on top of everything else in there. */
+		wlr_scene_node_reparent(&toplevel->scene_tree->node, tree);
+	}
 }
 
 static void focus_toplevel(struct tinywl_toplevel *toplevel) {
@@ -228,6 +524,19 @@ static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 		return;
 	}
 	struct tinywl_server *server = toplevel->server;
+	/* PerkinsOS: a minimised window comes back when it is focused. This
+	 * goes before the "already focused" check below, so that however we
+	 * got here, a window that ends up focused is always on screen. */
+	if (toplevel->minimized) {
+		toplevel->minimized = false;
+		wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
+	}
+	/* PerkinsOS: before the raise below, so this window ends up above a
+	 * fullscreen one coming back to window_tree. */
+	struct tinywl_toplevel *each;
+	wl_list_for_each(each, &server->toplevels, link) {
+		toplevel_update_tree(each, each == toplevel);
+	}
 	struct wlr_seat *seat = server->seat;
 	struct wlr_surface *prev_surface = seat->keyboard_state.focused_surface;
 	struct wlr_surface *surface = toplevel->xdg_toplevel->base->surface;
@@ -254,11 +563,11 @@ static void focus_toplevel(struct tinywl_toplevel *toplevel) {
 	wl_list_insert(&server->toplevels, &toplevel->link);
 	/* Activate the new surface */
 	wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, true);
-	/* PerkinsOS: highlight the focused window's border, dim the rest. */
+	/* PerkinsOS: highlight the focused window's border and title bar,
+	 * dim the rest. */
 	struct tinywl_toplevel *other;
 	wl_list_for_each(other, &server->toplevels, link) {
-		toplevel_set_border_color(other,
-			other == toplevel ? border_focused : border_unfocused);
+		toplevel_set_focused_look(other, other == toplevel);
 	}
 	/*
 	 * Tell the seat to have the keyboard enter this surface. wlroots will keep
@@ -292,7 +601,8 @@ static void keyboard_handle_modifiers(
 		&keyboard->wlr_keyboard->modifiers);
 }
 
-static bool handle_keybinding(struct tinywl_server *server, xkb_keysym_t sym) {
+static bool handle_keybinding(struct tinywl_server *server,
+		uint32_t modifiers, xkb_keysym_t sym) {
 	/*
 	 * Here we handle compositor keybindings. This is when the compositor is
 	 * processing keys, rather than passing them on to the client for its own
@@ -302,16 +612,29 @@ static bool handle_keybinding(struct tinywl_server *server, xkb_keysym_t sym) {
 	 */
 	switch (sym) {
 	case XKB_KEY_Escape:
+		/* PerkinsOS: quitting takes every open app with it, so it needs
+		 * Shift as well. Plain Alt+Escape goes to the window. */
+		if (!(modifiers & WLR_MODIFIER_SHIFT)) {
+			return false;
+		}
 		wl_display_terminate(server->wl_display);
 		break;
 	case XKB_KEY_F1:
 	case XKB_KEY_Tab: /* PerkinsOS: Alt+Tab, the usual key for this. */
 		/* Cycle to the next toplevel */
-		if (wl_list_length(&server->toplevels) < 2) {
+		if (wl_list_empty(&server->toplevels)) {
 			break;
 		}
+		/* PerkinsOS: the back of the list is where minimised windows
+		 * go, so Alt+Tab is also how you get them back. A lone window
+		 * is cycled to only if it is minimised; otherwise it already
+		 * has focus. */
 		struct tinywl_toplevel *next_toplevel =
 			wl_container_of(server->toplevels.prev, next_toplevel, link);
+		if (server->toplevels.prev == server->toplevels.next &&
+				!next_toplevel->minimized) {
+			break;
+		}
 		focus_toplevel(next_toplevel);
 		break;
 	case XKB_KEY_Return:
@@ -331,7 +654,12 @@ static bool handle_keybinding(struct tinywl_server *server, xkb_keysym_t sym) {
 		if (!wl_list_empty(&server->toplevels)) {
 			struct tinywl_toplevel *focused =
 				wl_container_of(server->toplevels.next, focused, link);
-			wlr_xdg_toplevel_send_close(focused->xdg_toplevel);
+			/* PerkinsOS: if the first one is minimised, they all are
+			 * and nothing has focus: don't close a window you can't
+			 * see. */
+			if (!focused->minimized) {
+				wlr_xdg_toplevel_send_close(focused->xdg_toplevel);
+			}
 		}
 		break;
 	default:
@@ -363,7 +691,7 @@ static void keyboard_handle_key(
 		/* If alt is held down and this button was _pressed_, we attempt to
 		 * process it as a compositor keybinding. */
 		for (int i = 0; i < nsyms; i++) {
-			handled = handle_keybinding(server, syms[i]);
+			handled = handle_keybinding(server, modifiers, syms[i]);
 		}
 	}
 
@@ -520,10 +848,91 @@ static struct tinywl_toplevel *desktop_toplevel_at(
 	return tree != NULL ? tree->node.data : NULL;
 }
 
+/* PerkinsOS: which part of one of our title bars is at a point. The bar
+ * is made of scene rects, not client surfaces, so desktop_toplevel_at()
+ * (which only looks at surfaces) never finds it. */
+static struct tinywl_toplevel *titlebar_at(struct tinywl_server *server,
+		double lx, double ly, enum titlebar_part *part) {
+	*part = TITLEBAR_NONE;
+	double sx, sy;
+	struct wlr_scene_node *node = wlr_scene_node_at(
+		&server->scene->tree.node, lx, ly, &sx, &sy);
+	if (node == NULL || node->type != WLR_SCENE_NODE_RECT) {
+		return NULL;
+	}
+	/* Walk up to the window's scene tree, the only one with data set, as
+	 * desktop_toplevel_at() does. */
+	struct wlr_scene_tree *tree = node->parent;
+	while (tree != NULL && tree->node.data == NULL) {
+		tree = tree->node.parent;
+	}
+	if (tree == NULL) {
+		return NULL; /* the wallpaper colour, not a window */
+	}
+	struct tinywl_toplevel *toplevel = tree->node.data;
+	/* The rectangle's parent says which part it is: each button's
+	 * background and drawing are children of its tree, the bar's
+	 * background a child of titlebar. Anything else is the border. */
+	if (node->parent == toplevel->close_button) {
+		*part = TITLEBAR_CLOSE;
+	} else if (node->parent == toplevel->minimize_button) {
+		*part = TITLEBAR_MINIMIZE;
+	} else if (node->parent == toplevel->titlebar) {
+		*part = TITLEBAR_BAR;
+	} else {
+		return NULL;
+	}
+	return toplevel;
+}
+
 static void reset_cursor_mode(struct tinywl_server *server) {
 	/* Reset the cursor mode to passthrough. */
 	server->cursor_mode = TINYWL_CURSOR_PASSTHROUGH;
 	server->grabbed_toplevel = NULL;
+}
+
+/* PerkinsOS: give the keyboard to the most recently used window still on
+ * screen. If every window is minimised (or there are none), nothing gets
+ * it, rather than a window you can't see. */
+static void focus_most_recent(struct tinywl_server *server) {
+	struct tinywl_toplevel *toplevel;
+	wl_list_for_each(toplevel, &server->toplevels, link) {
+		if (!toplevel->minimized) {
+			focus_toplevel(toplevel);
+			return;
+		}
+	}
+	/* While a layer surface (the launcher) holds the keyboard, leave it
+	 * there. */
+	if (server->focused_layer == NULL) {
+		wlr_seat_keyboard_notify_clear_focus(server->seat);
+	}
+}
+
+/* PerkinsOS: hide a window. Disabling its scene node takes the whole
+ * tree (window, popups, title bar, border) off the screen, and
+ * wlr_scene_node_at() skips disabled nodes, so clicks fall through to
+ * what is underneath. xdg-shell has no "minimised" state to configure,
+ * so the app is not told; it just stops being shown. */
+static void toplevel_minimize(struct tinywl_toplevel *toplevel) {
+	struct tinywl_server *server = toplevel->server;
+	if (toplevel->minimized) {
+		return;
+	}
+	toplevel->minimized = true;
+	wlr_scene_node_set_enabled(&toplevel->scene_tree->node, false);
+	if (server->grabbed_toplevel == toplevel) {
+		reset_cursor_mode(server);
+	}
+	/* Least recently used now: move it to the back of the focus order,
+	 * where Alt+Tab looks first. */
+	wl_list_remove(&toplevel->link);
+	wl_list_insert(server->toplevels.prev, &toplevel->link);
+	wlr_xdg_toplevel_set_activated(toplevel->xdg_toplevel, false);
+	toplevel_set_focused_look(toplevel, false);
+	/* If it had focus, the next window on screen gets it. If another
+	 * window had it, that one is now first and keeps it. */
+	focus_most_recent(server);
 }
 
 static void process_cursor_move(struct tinywl_server *server) {
@@ -683,7 +1092,8 @@ static bool begin_alt_drag(struct tinywl_server *server, uint32_t button) {
 	struct wlr_surface *surface = NULL;
 	struct tinywl_toplevel *toplevel = desktop_toplevel_at(server,
 			server->cursor->x, server->cursor->y, &surface, &sx, &sy);
-	if (toplevel == NULL || toplevel->maximized) {
+	if (toplevel == NULL || toplevel->maximized ||
+			toplevel->fullscreen) {
 		return false; /* nothing there, or it fills the screen */
 	}
 	focus_toplevel(toplevel);
@@ -700,7 +1110,7 @@ static bool begin_alt_drag(struct tinywl_server *server, uint32_t button) {
 			(y < box->height / 2.0 ? WLR_EDGE_TOP : WLR_EDGE_BOTTOM);
 		begin_interactive(toplevel, TINYWL_CURSOR_RESIZE, edges);
 	}
-	server->alt_drag_button = button;
+	server->grab_button = button;
 	return true;
 }
 
@@ -717,11 +1127,49 @@ static void server_cursor_button(struct wl_listener *listener, void *data) {
 		return;
 	}
 	if (event->state == WL_POINTER_BUTTON_STATE_RELEASED &&
-			server->alt_drag_button != 0 &&
-			event->button == server->alt_drag_button) {
-		server->alt_drag_button = 0;
+			server->grab_button != 0 &&
+			event->button == server->grab_button) {
+		server->grab_button = 0;
 		reset_cursor_mode(server);
 		return;
+	}
+	/* PerkinsOS: the left button on our title bar. No client draws there,
+	 * so the press is ours: the bar focuses the window and drags it, the
+	 * close and minimise buttons act once the button comes up over the
+	 * same one again. */
+	if (event->button == BTN_LEFT) {
+		enum titlebar_part part;
+		struct tinywl_toplevel *toplevel = titlebar_at(server,
+			server->cursor->x, server->cursor->y, &part);
+		if (event->state == WL_POINTER_BUTTON_STATE_PRESSED &&
+				toplevel != NULL) {
+			focus_toplevel(toplevel);
+			if (part != TITLEBAR_BAR) {
+				server->button_pressed = toplevel;
+				server->pressed_part = part;
+			} else if (!toplevel->maximized) {
+				begin_interactive(toplevel, TINYWL_CURSOR_MOVE, 0);
+				server->grab_button = BTN_LEFT;
+			}
+			return;
+		}
+		if (event->state == WL_POINTER_BUTTON_STATE_RELEASED &&
+				server->button_pressed != NULL) {
+			if (toplevel == server->button_pressed &&
+					part == server->pressed_part) {
+				if (part == TITLEBAR_CLOSE) {
+					/* Ask the app to close, as its own close
+					 * button would: it may first ask to save
+					 * your work. */
+					wlr_xdg_toplevel_send_close(
+						toplevel->xdg_toplevel);
+				} else {
+					toplevel_minimize(toplevel);
+				}
+			}
+			server->button_pressed = NULL;
+			return;
+		}
 	}
 	/* Notify the client with pointer focus that a button press has occurred */
 	wlr_seat_pointer_notify_button(server->seat,
@@ -801,9 +1249,13 @@ static void output_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&output->frame.link);
 	wl_list_remove(&output->request_state.link);
 	wl_list_remove(&output->destroy.link);
+	wl_list_remove(&output->commit.link);
 	wl_list_remove(&output->link);
-	/* PerkinsOS: the wallpaper rectangle goes with its screen. */
-	wlr_scene_node_destroy(&output->wallpaper->node);
+	/* PerkinsOS: the wallpaper rectangle goes with its screen, unless
+	 * the whole scene went first (at exit: see main()). */
+	if (output->wallpaper != NULL) {
+		wlr_scene_node_destroy(&output->wallpaper->node);
+	}
 	free(output);
 }
 
@@ -852,6 +1304,178 @@ static void arrange_layers(struct tinywl_output *output) {
 		}
 	}
 	output->usable_area = usable_area;
+}
+
+/* PerkinsOS: make a fullscreen window the size of the first screen. */
+static void toplevel_fill_screen(struct tinywl_toplevel *toplevel) {
+	struct tinywl_server *server = toplevel->server;
+	if (wl_list_empty(&server->outputs)) {
+		return;
+	}
+	struct tinywl_output *output =
+		wl_container_of(server->outputs.next, output, link);
+	struct wlr_box box;
+	wlr_output_layout_get_box(server->output_layout, output->wlr_output, &box);
+	wlr_scene_node_set_position(&toplevel->scene_tree->node, box.x, box.y);
+	wlr_scene_rect_set_size(toplevel->backdrop, box.width, box.height);
+	wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, box.width, box.height);
+}
+
+/* PerkinsOS: place a maximized window over the part of the first screen
+ * the dock leaves free. Our title bar sits above the window, so the
+ * window starts that much lower and is that much shorter. Used when a
+ * window is maximized, and again when the screen changes size. */
+static void toplevel_fill_usable_area(struct tinywl_toplevel *toplevel) {
+	struct tinywl_server *server = toplevel->server;
+	if (wl_list_empty(&server->outputs)) {
+		return;
+	}
+	struct tinywl_output *output =
+		wl_container_of(server->outputs.next, output, link);
+	const int th = toplevel_titlebar_height(toplevel);
+	wlr_scene_node_set_position(&toplevel->scene_tree->node,
+		output->usable_area.x, output->usable_area.y + th);
+	wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel,
+		output->usable_area.width, output->usable_area.height - th);
+}
+
+/* PerkinsOS: a screen changed. If its size did (a new mode, scale or
+ * rotation), everything sized to it follows: the wallpaper rectangle,
+ * the layer surfaces (arrange_layers() sends the cockpit and the dock
+ * their new size, and they redraw), and maximized windows. */
+static void output_commit(struct wl_listener *listener, void *data) {
+	struct tinywl_output *output = wl_container_of(listener, output, commit);
+	const struct wlr_output_event_commit *event = data;
+	if (!(event->state->committed & (WLR_OUTPUT_STATE_MODE |
+			WLR_OUTPUT_STATE_SCALE | WLR_OUTPUT_STATE_TRANSFORM))) {
+		return;
+	}
+	int width, height;
+	wlr_output_effective_resolution(output->wlr_output, &width, &height);
+	wlr_scene_rect_set_size(output->wallpaper, width, height);
+	arrange_layers(output);
+	struct tinywl_toplevel *toplevel;
+	wl_list_for_each(toplevel, &output->server->toplevels, link) {
+		if (toplevel->fullscreen) {
+			toplevel_fill_screen(toplevel);
+		} else if (toplevel->maximized) {
+			toplevel_fill_usable_area(toplevel);
+		}
+	}
+}
+
+/* PerkinsOS: switch a screen to its preferred mode, if that changed
+ * since we set it. In a VM this is how the screen follows QEMU's window:
+ * resizing the window makes the virtual card report a new preferred
+ * mode and send a hotplug event. A real monitor changing its preferred
+ * mode while plugged in is rare, so there this does nothing.
+ *
+ * wlroots reads a screen's list of modes only when it is plugged in, so
+ * we ask the kernel ourselves (drmModeGetConnector re-reads them) and
+ * hand the new mode to wlroots as a "custom" one. */
+static void output_follow_preferred_mode(struct tinywl_output *output) {
+	struct wlr_output *wlr_output = output->wlr_output;
+	if (!wlr_output_is_drm(wlr_output) || !wlr_output->enabled) {
+		return;
+	}
+	int fd = wlr_backend_get_drm_fd(wlr_output->backend);
+	drmModeConnector *connector = drmModeGetConnector(fd,
+		wlr_drm_connector_get_id(wlr_output));
+	if (connector == NULL) {
+		return;
+	}
+	drmModeModeInfo preferred;
+	bool found = false;
+	for (int i = 0; i < connector->count_modes; i++) {
+		if (connector->modes[i].type & DRM_MODE_TYPE_PREFERRED) {
+			preferred = connector->modes[i];
+			found = true;
+			break;
+		}
+	}
+	drmModeFreeConnector(connector);
+	if (!found || (preferred.hdisplay == wlr_output->width &&
+			preferred.vdisplay == wlr_output->height)) {
+		return;
+	}
+	/* wlroots only takes modes marked as made up by the user. */
+	preferred.type = DRM_MODE_TYPE_USERDEF;
+	struct wlr_output_mode *mode =
+		wlr_drm_connector_add_mode(wlr_output, &preferred);
+	if (mode == NULL) {
+		return;
+	}
+	wlr_log(WLR_INFO, "%s: preferred mode is now %dx%d, switching",
+		wlr_output->name, mode->width, mode->height);
+	struct wlr_output_state state;
+	wlr_output_state_init(&state);
+	wlr_output_state_set_mode(&state, mode);
+	wlr_output_commit_state(wlr_output, &state); /* runs output_commit() */
+	wlr_output_state_finish(&state);
+}
+
+/* PerkinsOS: a graphics card's hotplug event. wlroots handles screens
+ * being plugged in and out itself (server_new_output(), output_destroy());
+ * what it leaves to us is a screen that stays plugged in but changes its
+ * preferred mode. */
+static void gpu_change(struct wl_listener *listener, void *data) {
+	struct tinywl_gpu *gpu = wl_container_of(listener, gpu, change);
+	const struct wlr_device_change_event *event = data;
+	if (event->type != WLR_DEVICE_HOTPLUG) {
+		return;
+	}
+	struct tinywl_output *output;
+	wl_list_for_each(output, &gpu->server->outputs, link) {
+		output_follow_preferred_mode(output);
+	}
+}
+
+static void gpu_forget(struct tinywl_gpu *gpu) {
+	wl_list_remove(&gpu->change.link);
+	wl_list_remove(&gpu->remove.link);
+	wl_list_remove(&gpu->link);
+	free(gpu);
+}
+
+static void gpu_remove(struct wl_listener *listener, void *data) {
+	struct tinywl_gpu *gpu = wl_container_of(listener, gpu, remove);
+	gpu_forget(gpu);
+}
+
+/* PerkinsOS: watch every graphics card the session has open. Call after
+ * wlr_backend_autocreate(), which opens them, and before
+ * wlr_backend_start(), which opens the input devices too: only cards
+ * are in the list then.
+ *
+ * wlroots closes a card's file when the card goes away or the backend
+ * is destroyed, and it asserts that nothing is listening for that card's
+ * changes by then. So server_forget_gpus() must run before
+ * wlr_backend_destroy(), and our "remove" listener must run before the
+ * DRM backend's (which closes the file). wl_signal_add() would put ours
+ * last, so it goes at the head of the list instead. */
+static void server_watch_gpus(struct tinywl_server *server) {
+	wl_list_init(&server->gpus);
+	if (server->session == NULL) {
+		return; /* nested in another desktop: no cards of our own */
+	}
+	struct wlr_device *device;
+	wl_list_for_each(device, &server->session->devices, link) {
+		struct tinywl_gpu *gpu = calloc(1, sizeof(*gpu));
+		gpu->server = server;
+		gpu->change.notify = gpu_change;
+		wl_signal_add(&device->events.change, &gpu->change);
+		gpu->remove.notify = gpu_remove;
+		wl_list_insert(&device->events.remove.listener_list,
+			&gpu->remove.link);
+		wl_list_insert(&server->gpus, &gpu->link);
+	}
+}
+
+static void server_forget_gpus(struct tinywl_server *server) {
+	struct tinywl_gpu *gpu, *tmp;
+	wl_list_for_each_safe(gpu, tmp, &server->gpus, link) {
+		gpu_forget(gpu);
+	}
 }
 
 static void layer_surface_commit(struct wl_listener *listener, void *data) {
@@ -908,11 +1532,7 @@ static void layer_surface_unmap(struct wl_listener *listener, void *data) {
 	if (server->focused_layer == l) {
 		server->focused_layer = NULL;
 		wlr_seat_keyboard_notify_clear_focus(server->seat);
-		if (!wl_list_empty(&server->toplevels)) {
-			struct tinywl_toplevel *toplevel =
-				wl_container_of(server->toplevels.next, toplevel, link);
-			focus_toplevel(toplevel);
-		}
+		focus_most_recent(server);
 	}
 }
 
@@ -1057,45 +1677,117 @@ static void server_new_output(struct wl_listener *listener, void *data) {
 	/* PerkinsOS: no layer surfaces yet, so this just sets usable_area to
 	 * the whole screen. */
 	arrange_layers(output);
+
+	/* PerkinsOS: follow changes of size. Added after the output layout's
+	 * own listener (in wlr_output_layout_add_auto()), so by the time ours
+	 * runs the layout already knows the new size. */
+	output->commit.notify = output_commit;
+	wl_signal_add(&wlr_output->events.commit, &output->commit);
 }
 
-/* PerkinsOS: maximize or restore a window. Maximized means filling the
- * usable area of the first screen: the screen minus whatever the dock and
+/* PerkinsOS: make a window maximized, fullscreen, both (fullscreen wins) or
+ * neither. Fullscreen fills the first screen. Maximized means filling the
+ * usable area of it: the screen minus whatever the dock and
  * other layer surfaces have claimed. That is the reason usable_area exists. */
-static void toplevel_set_maximized(struct tinywl_toplevel *toplevel,
-		bool maximize) {
+static void toplevel_set_filling(struct tinywl_toplevel *toplevel,
+		bool maximized, bool fullscreen) {
 	struct tinywl_server *server = toplevel->server;
 	struct wlr_xdg_toplevel *xdg_toplevel = toplevel->xdg_toplevel;
-	if (maximize == toplevel->maximized || wl_list_empty(&server->outputs)) {
+	if ((maximized == toplevel->maximized &&
+			fullscreen == toplevel->fullscreen) ||
+			wl_list_empty(&server->outputs)) {
 		/* Nothing to change, but the protocol still requires a reply. */
 		wlr_xdg_surface_schedule_configure(xdg_toplevel->base);
 		return;
 	}
 	struct wlr_scene_node *node = &toplevel->scene_tree->node;
-	if (maximize) {
-		struct tinywl_output *output =
-			wl_container_of(server->outputs.next, output, link);
-		/* Remember where the window was so un-maximizing can put it back. */
+	if (!toplevel->maximized && !toplevel->fullscreen) {
+		/* Remember where the window was so it can be put back. */
 		toplevel->restore.x = node->x;
 		toplevel->restore.y = node->y;
 		toplevel->restore.width = xdg_toplevel->base->geometry.width;
 		toplevel->restore.height = xdg_toplevel->base->geometry.height;
-		wlr_scene_node_set_position(node,
-			output->usable_area.x, output->usable_area.y);
-		wlr_xdg_toplevel_set_size(xdg_toplevel,
-			output->usable_area.width, output->usable_area.height);
+	}
+	toplevel->maximized = maximized;
+	toplevel->fullscreen = fullscreen;
+	if (server->grabbed_toplevel == toplevel) {
+		reset_cursor_mode(server); /* it is no longer being dragged */
+	}
+
+	if (fullscreen) {
+		toplevel_fill_screen(toplevel);
+	} else if (maximized) {
+		toplevel_fill_usable_area(toplevel);
 	} else {
-		/* A restore size of 0x0 (the window was never un-maximized before)
-		 * means "client, pick your own size". */
+		/* A restore size of 0x0 (the window started out filling the
+		 * screen) means "client, pick your own size". */
 		wlr_scene_node_set_position(node,
 			toplevel->restore.x, toplevel->restore.y);
 		wlr_xdg_toplevel_set_size(xdg_toplevel,
 			toplevel->restore.width, toplevel->restore.height);
 	}
 	/* Tell the client its new state so it can redraw to match (for
-	 * example, swap its maximize button for a restore button). */
-	wlr_xdg_toplevel_set_maximized(xdg_toplevel, maximize);
-	toplevel->maximized = maximize;
+	 * example, swap its maximize button for a restore button, or hide a
+	 * browser's toolbars). */
+	wlr_xdg_toplevel_set_maximized(xdg_toplevel, maximized);
+	wlr_xdg_toplevel_set_fullscreen(xdg_toplevel, fullscreen);
+
+	wlr_scene_node_set_enabled(&toplevel->backdrop->node, fullscreen);
+	toplevel_update_borders(toplevel);
+	/* The list is in focus order, so the first window is the focused one.
+	 * A window that is not mapped yet is not in it: xdg_toplevel_map()
+	 * focuses it, which puts it in the right tree. */
+	toplevel_update_tree(toplevel, !toplevel->minimized &&
+		server->toplevels.next == &toplevel->link);
+}
+
+/* PerkinsOS: tell a window's client that we draw its title bar. Whatever
+ * mode it asks for, the answer is server-side, so every window that
+ * speaks xdg-decoration looks the same. Setting the mode sends the client
+ * a configure, which is only allowed after its first commit; before that,
+ * xdg_toplevel_commit() calls this again at the first commit. */
+static void toplevel_use_server_side(struct tinywl_toplevel *toplevel) {
+	if (toplevel->decoration != NULL &&
+			toplevel->xdg_toplevel->base->initialized) {
+		wlr_xdg_toplevel_decoration_v1_set_mode(toplevel->decoration,
+			WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+	}
+}
+
+static void decoration_request_mode(struct wl_listener *listener,
+		void *data) {
+	struct tinywl_toplevel *toplevel =
+		wl_container_of(listener, toplevel, decoration_request_mode);
+	toplevel_use_server_side(toplevel);
+}
+
+static void decoration_destroy(struct wl_listener *listener, void *data) {
+	/* The client dropped its decoration object: from now on it draws its
+	 * own title bar, if any, so ours goes. */
+	struct tinywl_toplevel *toplevel =
+		wl_container_of(listener, toplevel, decoration_destroy);
+	wl_list_remove(&toplevel->decoration_request_mode.link);
+	wl_list_remove(&toplevel->decoration_destroy.link);
+	toplevel->decoration = NULL;
+	toplevel_update_borders(toplevel);
+}
+
+/* A client made a decoration object for one of its windows: it speaks
+ * xdg-decoration and will let us draw the title bar. */
+static void server_new_decoration(struct wl_listener *listener, void *data) {
+	struct wlr_xdg_toplevel_decoration_v1 *decoration = data;
+	/* server_new_xdg_toplevel() put the window's scene tree in base->data,
+	 * and the tinywl_toplevel in that tree's node.data. */
+	struct wlr_scene_tree *tree = decoration->toplevel->base->data;
+	struct tinywl_toplevel *toplevel = tree->node.data;
+	toplevel->decoration = decoration;
+	toplevel->decoration_request_mode.notify = decoration_request_mode;
+	wl_signal_add(&decoration->events.request_mode,
+		&toplevel->decoration_request_mode);
+	toplevel->decoration_destroy.notify = decoration_destroy;
+	wl_signal_add(&decoration->events.destroy, &toplevel->decoration_destroy);
+	toplevel_use_server_side(toplevel);
+	toplevel_update_borders(toplevel);
 }
 
 static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
@@ -1105,9 +1797,9 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 	/* PerkinsOS: stock TinyWL opens every window at 0,0, exactly on top of
 	 * the last one. Step each new window down and right so they cascade. */
 	int n = wl_list_length(&toplevel->server->toplevels) % 8;
-	if (toplevel->maximized) {
-		/* It asked to start maximized and is already in place; make the
-		 * cascade slot the spot it returns to when un-maximized. */
+	if (toplevel->maximized || toplevel->fullscreen) {
+		/* It asked to start that way and is already in place; make the
+		 * cascade slot the spot it returns to afterwards. */
 		toplevel->restore.x = 40 + 32 * n;
 		toplevel->restore.y = 40 + 32 * n;
 	} else {
@@ -1115,6 +1807,10 @@ static void xdg_toplevel_map(struct wl_listener *listener, void *data) {
 			40 + 32 * n, 40 + 32 * n);
 	}
 	toplevel_update_borders(toplevel);
+
+	/* PerkinsOS: a window minimised when it unmapped comes back shown. */
+	toplevel->minimized = false;
+	wlr_scene_node_set_enabled(&toplevel->scene_tree->node, true);
 
 	wl_list_insert(&toplevel->server->toplevels, &toplevel->link);
 
@@ -1132,15 +1828,16 @@ static void xdg_toplevel_unmap(struct wl_listener *listener, void *data) {
 
 	wl_list_remove(&toplevel->link);
 
+	/* PerkinsOS: xdg-shell says a window that unmaps forgets its state. If
+	 * it is shown again, it asks again. */
+	toplevel->maximized = toplevel->fullscreen = false;
+	wlr_scene_node_set_enabled(&toplevel->backdrop->node, false);
+	toplevel_update_tree(toplevel, false);
+
 	/* PerkinsOS: stock TinyWL leaves nothing focused when the focused
 	 * window closes, so typing goes nowhere until you click. Hand focus
-	 * to the most recently used window that is left. */
-	struct tinywl_server *server = toplevel->server;
-	if (!wl_list_empty(&server->toplevels)) {
-		struct tinywl_toplevel *next =
-			wl_container_of(server->toplevels.next, next, link);
-		focus_toplevel(next);
-	}
+	 * to the most recently used window that is left on screen. */
+	focus_most_recent(toplevel->server);
 }
 
 static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
@@ -1153,11 +1850,17 @@ static void xdg_toplevel_commit(struct wl_listener *listener, void *data) {
 		 * configures the xdg_toplevel with 0,0 size to let the client pick the
 		 * dimensions itself. */
 		wlr_xdg_toplevel_set_size(toplevel->xdg_toplevel, 0, 0);
+		/* PerkinsOS: the decoration mode could not be sent before now
+		 * either (toplevel_use_server_side()). */
+		toplevel_use_server_side(toplevel);
 		/* PerkinsOS: a client may ask to be maximized before this first
 		 * commit (`foot --maximized`). The request could not be answered
 		 * then, so apply it now; it replaces the 0,0 size above. */
-		if (toplevel->xdg_toplevel->requested.maximized) {
-			toplevel_set_maximized(toplevel, true);
+		if (toplevel->xdg_toplevel->requested.maximized ||
+				toplevel->xdg_toplevel->requested.fullscreen) {
+			toplevel_set_filling(toplevel,
+				toplevel->xdg_toplevel->requested.maximized,
+				toplevel->xdg_toplevel->requested.fullscreen);
 		}
 		return;
 	}
@@ -1178,7 +1881,19 @@ static void xdg_toplevel_destroy(struct wl_listener *listener, void *data) {
 	wl_list_remove(&toplevel->request_move.link);
 	wl_list_remove(&toplevel->request_resize.link);
 	wl_list_remove(&toplevel->request_maximize.link);
+	wl_list_remove(&toplevel->request_minimize.link);
 	wl_list_remove(&toplevel->request_fullscreen.link);
+	wl_list_remove(&toplevel->set_title.link);
+	/* PerkinsOS: wlroots destroys the decoration object when the window
+	 * goes, but after this function has freed toplevel. Stop listening
+	 * now, or decoration_destroy() would write to freed memory. */
+	if (toplevel->decoration != NULL) {
+		wl_list_remove(&toplevel->decoration_request_mode.link);
+		wl_list_remove(&toplevel->decoration_destroy.link);
+	}
+	if (toplevel->server->button_pressed == toplevel) {
+		toplevel->server->button_pressed = NULL;
+	}
 
 	free(toplevel);
 }
@@ -1222,7 +1937,10 @@ static void xdg_toplevel_request_move(
 	 * provided serial against a list of button press serials sent to this
 	 * client, to prevent the client from requesting this whenever they want. */
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, request_move);
-	begin_interactive(toplevel, TINYWL_CURSOR_MOVE, 0);
+	/* PerkinsOS: a fullscreen window stays where it is. */
+	if (!toplevel->fullscreen) {
+		begin_interactive(toplevel, TINYWL_CURSOR_MOVE, 0);
+	}
 }
 
 static void xdg_toplevel_request_resize(
@@ -1234,7 +1952,9 @@ static void xdg_toplevel_request_resize(
 	 * client, to prevent the client from requesting this whenever they want. */
 	struct wlr_xdg_toplevel_resize_event *event = data;
 	struct tinywl_toplevel *toplevel = wl_container_of(listener, toplevel, request_resize);
-	begin_interactive(toplevel, TINYWL_CURSOR_RESIZE, event->edges);
+	if (!toplevel->fullscreen) {
+		begin_interactive(toplevel, TINYWL_CURSOR_RESIZE, event->edges);
+	}
 }
 
 static void xdg_toplevel_request_maximize(
@@ -1252,18 +1972,43 @@ static void xdg_toplevel_request_maximize(
 	 * client just asked for. Before the first commit we can't reply yet;
 	 * xdg_toplevel_commit() picks the request up then. */
 	if (toplevel->xdg_toplevel->base->initialized) {
-		toplevel_set_maximized(toplevel,
-			toplevel->xdg_toplevel->requested.maximized);
+		toplevel_set_filling(toplevel,
+			toplevel->xdg_toplevel->requested.maximized,
+			toplevel->fullscreen);
+	}
+}
+
+static void xdg_toplevel_request_minimize(
+		struct wl_listener *listener, void *data) {
+	/* PerkinsOS: the app's own minimise button (GTK apps have one). Only
+	 * a window on screen can be hidden: before it maps it is not in the
+	 * toplevels list yet. */
+	struct tinywl_toplevel *toplevel =
+		wl_container_of(listener, toplevel, request_minimize);
+	if (toplevel->xdg_toplevel->base->surface->mapped) {
+		toplevel_minimize(toplevel);
 	}
 }
 
 static void xdg_toplevel_request_fullscreen(
 		struct wl_listener *listener, void *data) {
-	/* Just as with request_maximize, we must send a configure here. */
+	/* PerkinsOS: as with maximize, stock TinyWL only replies; a request
+	 * made before the first commit waits for xdg_toplevel_commit(). */
 	struct tinywl_toplevel *toplevel =
 		wl_container_of(listener, toplevel, request_fullscreen);
 	if (toplevel->xdg_toplevel->base->initialized) {
-		wlr_xdg_surface_schedule_configure(toplevel->xdg_toplevel->base);
+		toplevel_set_filling(toplevel, toplevel->maximized,
+			toplevel->xdg_toplevel->requested.fullscreen);
+	}
+}
+
+/* PerkinsOS: the app renamed its window (a browser changing page, say). */
+static void xdg_toplevel_set_title(struct wl_listener *listener, void *data) {
+	struct tinywl_toplevel *toplevel =
+		wl_container_of(listener, toplevel, set_title);
+	toplevel->title_changed = true;
+	if (toplevel_has_titlebar(toplevel)) {
+		toplevel_update_title(toplevel);
 	}
 }
 
@@ -1281,12 +2026,53 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	toplevel->scene_tree->node.data = toplevel;
 	xdg_toplevel->base->data = toplevel->scene_tree;
 
+	toplevel->backdrop = wlr_scene_rect_create(toplevel->scene_tree,
+		0, 0, fullscreen_backdrop);
+	wlr_scene_node_lower_to_bottom(&toplevel->backdrop->node);
+	wlr_scene_node_set_enabled(&toplevel->backdrop->node, false);
 	/* PerkinsOS: create the border rectangles. They start with no size;
 	 * toplevel_update_borders() fits them once the window has one. */
 	for (int i = 0; i < 4; i++) {
 		toplevel->border[i] = wlr_scene_rect_create(toplevel->scene_tree,
 			0, 0, border_unfocused);
 	}
+
+	/* PerkinsOS: the title bar's nodes, hidden until the client turns
+	 * out to speak xdg-decoration (server_new_decoration()). The X is
+	 * one square per step down each diagonal: (a, a) runs top-left to
+	 * bottom-right, (b, a) top-right to bottom-left. */
+	toplevel->titlebar = wlr_scene_tree_create(toplevel->scene_tree);
+	toplevel->titlebar_background = wlr_scene_rect_create(
+		toplevel->titlebar, 0, 0, title_unfocused);
+	toplevel->title = wlr_scene_buffer_create(toplevel->titlebar, NULL);
+	toplevel->title->point_accepts_input = title_accepts_input;
+	toplevel->title_changed = true;
+	toplevel->close_button = wlr_scene_tree_create(toplevel->titlebar);
+	wlr_scene_rect_create(toplevel->close_button,
+		CLOSE_SIZE, CLOSE_SIZE, close_background);
+	const int inset = (CLOSE_SIZE - CLOSE_X_STEPS * CLOSE_PIXEL) / 2;
+	for (int i = 0; i < CLOSE_X_STEPS; i++) {
+		int a = inset + i * CLOSE_PIXEL;
+		int b = inset + (CLOSE_X_STEPS - 1 - i) * CLOSE_PIXEL;
+		toplevel->close_x[2 * i] = wlr_scene_rect_create(
+			toplevel->close_button, CLOSE_PIXEL, CLOSE_PIXEL,
+			border_unfocused);
+		wlr_scene_node_set_position(&toplevel->close_x[2 * i]->node, a, a);
+		toplevel->close_x[2 * i + 1] = wlr_scene_rect_create(
+			toplevel->close_button, CLOSE_PIXEL, CLOSE_PIXEL,
+			border_unfocused);
+		wlr_scene_node_set_position(&toplevel->close_x[2 * i + 1]->node, b, a);
+	}
+	/* The minimise button: the same square, with a line along the
+	 * bottom row of where the X would be. */
+	toplevel->minimize_button = wlr_scene_tree_create(toplevel->titlebar);
+	wlr_scene_rect_create(toplevel->minimize_button,
+		CLOSE_SIZE, CLOSE_SIZE, close_background);
+	toplevel->minimize_line = wlr_scene_rect_create(toplevel->minimize_button,
+		CLOSE_X_STEPS * CLOSE_PIXEL, CLOSE_PIXEL, border_unfocused);
+	wlr_scene_node_set_position(&toplevel->minimize_line->node,
+		inset, inset + (CLOSE_X_STEPS - 1) * CLOSE_PIXEL);
+	wlr_scene_node_set_enabled(&toplevel->titlebar->node, false);
 
 	/* Listen to the various events it can emit */
 	toplevel->map.notify = xdg_toplevel_map;
@@ -1306,8 +2092,12 @@ static void server_new_xdg_toplevel(struct wl_listener *listener, void *data) {
 	wl_signal_add(&xdg_toplevel->events.request_resize, &toplevel->request_resize);
 	toplevel->request_maximize.notify = xdg_toplevel_request_maximize;
 	wl_signal_add(&xdg_toplevel->events.request_maximize, &toplevel->request_maximize);
+	toplevel->request_minimize.notify = xdg_toplevel_request_minimize;
+	wl_signal_add(&xdg_toplevel->events.request_minimize, &toplevel->request_minimize);
 	toplevel->request_fullscreen.notify = xdg_toplevel_request_fullscreen;
 	wl_signal_add(&xdg_toplevel->events.request_fullscreen, &toplevel->request_fullscreen);
+	toplevel->set_title.notify = xdg_toplevel_set_title;
+	wl_signal_add(&xdg_toplevel->events.set_title, &toplevel->set_title);
 }
 
 static void xdg_popup_commit(struct wl_listener *listener, void *data) {
@@ -1409,11 +2199,14 @@ int main(int argc, char *argv[]) {
 	 * output hardware. The autocreate option will choose the most suitable
 	 * backend based on the current environment, such as opening an X11 window
 	 * if an X11 server is running. */
-	server.backend = wlr_backend_autocreate(wl_display_get_event_loop(server.wl_display), NULL);
+	/* PerkinsOS: keep the session (stock TinyWL passes NULL here). */
+	server.backend = wlr_backend_autocreate(
+		wl_display_get_event_loop(server.wl_display), &server.session);
 	if (server.backend == NULL) {
 		wlr_log(WLR_ERROR, "failed to create wlr_backend");
 		return 1;
 	}
+	server_watch_gpus(&server);
 
 	/* Autocreates a renderer, either Pixman, GLES2 or Vulkan for us. The user
 	 * can also specify a renderer using the WLR_RENDERER env var.
@@ -1477,6 +2270,7 @@ int main(int argc, char *argv[]) {
 	server.window_tree = wlr_scene_tree_create(&server.scene->tree);
 	server.layer_trees[ZWLR_LAYER_SHELL_V1_LAYER_TOP] =
 		wlr_scene_tree_create(&server.scene->tree);
+	server.fullscreen_tree = wlr_scene_tree_create(&server.scene->tree);
 	server.layer_trees[ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY] =
 		wlr_scene_tree_create(&server.scene->tree);
 
@@ -1490,6 +2284,15 @@ int main(int argc, char *argv[]) {
 	wl_signal_add(&server.xdg_shell->events.new_toplevel, &server.new_xdg_toplevel);
 	server.new_xdg_popup.notify = server_new_xdg_popup;
 	wl_signal_add(&server.xdg_shell->events.new_popup, &server.new_xdg_popup);
+
+	/* PerkinsOS: advertise xdg-decoration. Clients that bind it (foot,
+	 * Firefox, Qt apps) ask us about their title bar, and we draw it;
+	 * see server_new_decoration(). */
+	server.decoration_manager =
+		wlr_xdg_decoration_manager_v1_create(server.wl_display);
+	server.new_decoration.notify = server_new_decoration;
+	wl_signal_add(&server.decoration_manager->events.new_toplevel_decoration,
+		&server.new_decoration);
 
 	/* PerkinsOS: advertise layer-shell (version 4) to clients. From here
 	 * on `wayland-info` lists zwlr_layer_shell_v1, and a client that binds
@@ -1555,6 +2358,7 @@ int main(int argc, char *argv[]) {
 	/* Add a Unix socket to the Wayland display. */
 	const char *socket = wl_display_add_socket_auto(server.wl_display);
 	if (!socket) {
+		server_forget_gpus(&server);
 		wlr_backend_destroy(server.backend);
 		return 1;
 	}
@@ -1562,6 +2366,7 @@ int main(int argc, char *argv[]) {
 	/* Start the backend. This will enumerate outputs and inputs, become the DRM
 	 * master, etc */
 	if (!wlr_backend_start(server.backend)) {
+		server_forget_gpus(&server);
 		wlr_backend_destroy(server.backend);
 		wl_display_destroy(server.wl_display);
 		return 1;
@@ -1591,6 +2396,7 @@ int main(int argc, char *argv[]) {
 	wl_list_remove(&server.new_xdg_toplevel.link);
 	wl_list_remove(&server.new_xdg_popup.link);
 	wl_list_remove(&server.new_layer_surface.link);
+	wl_list_remove(&server.new_decoration.link);
 
 	wl_list_remove(&server.cursor_motion.link);
 	wl_list_remove(&server.cursor_motion_absolute.link);
@@ -1604,11 +2410,20 @@ int main(int argc, char *argv[]) {
 
 	wl_list_remove(&server.new_output.link);
 
+	/* PerkinsOS: destroying the scene frees every node in it, our
+	 * wallpaper rectangles included. The screens are destroyed after
+	 * that, by wlr_backend_destroy(), and output_destroy() must not
+	 * destroy their rectangles a second time. */
+	struct tinywl_output *output;
+	wl_list_for_each(output, &server.outputs, link) {
+		output->wallpaper = NULL;
+	}
 	wlr_scene_node_destroy(&server.scene->tree.node);
 	wlr_xcursor_manager_destroy(server.cursor_mgr);
 	wlr_cursor_destroy(server.cursor);
 	wlr_allocator_destroy(server.allocator);
 	wlr_renderer_destroy(server.renderer);
+	server_forget_gpus(&server);
 	wlr_backend_destroy(server.backend);
 	wl_display_destroy(server.wl_display);
 	return 0;

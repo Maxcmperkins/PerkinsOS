@@ -223,6 +223,15 @@ static int compare_names(const void *a, const void *b) {
 	return strcmp(((const struct app *)a)->name, ((const struct app *)b)->name);
 }
 
+/* The foot package installs three entries: foot itself, and two for its
+ * server mode ("Foot Client", "Foot Server"). TERMINAL already starts foot,
+ * and the client does nothing unless the server is running. */
+static bool is_duplicate_terminal(const char *file_name) {
+	return strcmp(file_name, "foot.desktop") == 0 ||
+		strcmp(file_name, "footclient.desktop") == 0 ||
+		strcmp(file_name, "foot-server.desktop") == 0;
+}
+
 /* Add every installed app that is not on the list already, in A-Z order. */
 static void add_installed(struct app_list *list) {
 	char *dirs[MAX_DIRS];
@@ -236,6 +245,9 @@ static void add_installed(struct app_list *list) {
 		struct dirent *entry;
 		while (dir != NULL && (entry = readdir(dir)) != NULL) {
 			if (!ends_with(entry->d_name, ".desktop")) {
+				continue;
+			}
+			if (is_duplicate_terminal(entry->d_name)) {
 				continue;
 			}
 			bool already = false;
@@ -330,9 +342,13 @@ void apps_load_pinned(struct app_list *list) {
 	}
 }
 
-void apps_load_all(struct app_list *list) {
+void apps_load_installed(struct app_list *list) {
 	apps_load_pinned(list);
 	add_installed(list);
+}
+
+void apps_load_all(struct app_list *list) {
+	apps_load_installed(list);
 	for (int i = 0; i < ACTION_COUNT; i++) {
 		add_app(list, &actions[i]);
 	}

@@ -1,4 +1,6 @@
-# Build the image from scratch and boot it, on every push and pull request.
+# On every push and pull request: build the image from scratch and boot it
+# (boot), and build the desktop on Ubuntu, the way the USB stick has it
+# (distro).
 name: CI
 
 on:
@@ -53,3 +55,69 @@ jobs:
           name: desktop-screenshots
           path: output/*-test.png
           if-no-files-found: ignore
+
+  # The desktop on Ubuntu 26.04 (distro/, docs/PLAN-DAILY-DRIVER.md): the
+  # same compositor/ and shell/ source as the image, built against Ubuntu's
+  # own wlroots and libraries instead of Buildroot's. This is what
+  # distro/vm.sh and distro/usb.sh install, so a change that builds in the
+  # image but not on Ubuntu fails here, in minutes, not on the laptop.
+  distro:
+    runs-on: ubuntu-24.04
+    container: ubuntu:26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # The build packages listed at the top of distro/Makefile. Nothing
+      # else: the container starts with almost nothing installed, so a
+      # package missing from that list fails here.
+      # Acquire::Retries: Ubuntu's archive sometimes refuses connections
+      # from GitHub's runners for a minute; retry rather than fail the job.
+      - name: Install Ubuntu's build packages
+        run: |
+          echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80-retries
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwlroots-0.19-dev libwayland-dev \
+            wayland-protocols libxkbcommon-dev libcairo2-dev python3
+
+      - name: Test the Python tools
+        run: python3 ci/test_tools.py
+
+      - name: Build the compositor and shell
+        run: make -C distro
+
+      # Into a folder, not the system: checks every file `install` copies
+      # exists, without needing root or a running systemd.
+      - name: Install into a staging folder
+        run: |
+          make -C distro install DESTDIR="$PWD/stage"
+          make -C distro install-login DESTDIR="$PWD/stage"
+          ls -R stage | head -50
+
+      # The package: build it, then install it with apt as a user would.
+      # apt fetches what it depends on, so a wrong package name in
+      # distro/deb/control.in fails here. -h only prints the usage, but
+      # needs every library to load.
+      - name: Build and install the .deb
+        run: |
+          make -C distro deb
+          dpkg-deb --info distro/build/deb/perkinsos_*.deb
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ./distro/build/deb/perkinsos_*.deb
+          perkinsos-compositor -h
+          dpkg -L perkinsos
+
+      # Skips itself until the compositor can lock (see the script).
+      - name: Screen locking
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            swaylock wayland-utils fonts-dejavu-core
+          bash distro/test-lock.sh
+
+      - name: Check the distro scripts parse
+        run: |
+          for f in distro/*.sh; do bash -n "$f"; done
+          for f in start report lock volume brightness; do
+            sh -n "distro/perkinsos-$f"
+          done

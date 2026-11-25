@@ -1,0 +1,17 @@
+#!/bin/sh
+# Change the screen's brightness and show it. For the compositor's
+# brightness keys. brightnessctl asks logind, so it needs no root.
+#   perkinsos-brightness up|down
+set -eu
+case "${1:-}" in
+up) change=5%+ ;;
+down) change=5%- ;;
+*) echo "usage: perkinsos-brightness up|down" >&2; exit 2 ;;
+esac
+# -n1: never all the way to 0, which can mean a black screen.
+brightnessctl -q -c backlight -n1 set "$change"
+# -m prints one line of commas: device,class,now,percent,max.
+percent=$(brightnessctl -m -c backlight | head -1 | cut -d, -f4 | tr -d %)
+command -v notify-send > /dev/null || exit 0
+notify-send -t 1500 -h string:x-canonical-private-synchronous:brightness \
+	-h "int:value:$percent" "BRIGHTNESS $percent%" || true

@@ -48,6 +48,9 @@ are Electron (Chromium inside). Started plainly, they print
 
 ## Rough edges seen
 
+- The theme (`distro/theme/`) reaches GTK apps fully. The Firefox snap goes
+  dark and takes the font, but keeps its own colours and a white cursor.
+  GTK 4 apps made with libadwaita only follow the dark setting.
 - Discord opened an "Open With… No apps available" box at start-up: it
   asks the system to open a link (a `discord:` address, it seems) and
   nothing in the VM handles it. Harmless; close it.

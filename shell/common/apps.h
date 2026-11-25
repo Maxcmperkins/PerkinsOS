@@ -27,6 +27,8 @@ struct app_list {
 
 /* Fill `list` (which must start out zeroed). Free it with apps_free(). */
 void apps_load_pinned(struct app_list *list);
+/* The launcher's list without SHUT DOWN and RESTART. */
+void apps_load_installed(struct app_list *list);
 void apps_load_all(struct app_list *list);
 void apps_free(struct app_list *list);
 

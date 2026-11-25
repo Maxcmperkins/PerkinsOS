@@ -1,6 +1,6 @@
 # PerkinsOS
 
-A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon and an F-35 fly in formation ahead of you over sea and cloud, seen through the HUD, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps. The aircraft are 3D models, lit and drawn by a small software renderer. They are downloaded models converted to a simple mesh format (see Credits).
+A custom Linux-based desktop OS. The kernel is real Linux; the desktop on top of it is this repo: a Wayland compositor, dock, launcher and an app, booting straight to the desktop in QEMU. The desktop is the view from a fighter cockpit: a Typhoon and an F-35 fly in formation either side of you over sea and cloud, and the instrument panel has a radar and a radar warning receiver that show the machine's running programs, plus keys that start apps. The aircraft are 3D models, lit and drawn by a small software renderer. They are downloaded models converted to a simple mesh format (see Credits).
 
 [![CI](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml/badge.svg)](https://github.com/Maxcmperkins/PerkinsOS/actions/workflows/ci.yml)
 
@@ -43,13 +43,13 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Key | Action |
 | --- | --- |
-| Alt+P, or the dock's Apps button | Open the launcher: type to filter, Enter to start, Escape to cancel |
+| Alt+P, or the dock's Apps button | Open the launcher: type to filter, Enter or a click to start, Escape to cancel |
 | Alt+Enter | Open a terminal |
 | Alt+Q | Close the focused window |
-| Alt+Tab, or Alt+F1 | Switch to the next window |
+| Alt+Tab, or Alt+F1 | Switch to the next window, minimised ones included |
 | Alt+left-drag | Move the window under the pointer, from anywhere in it |
 | Alt+right-drag | Resize the window under the pointer, from the corner nearest the pointer |
-| Alt+Escape | Quit the compositor |
+| Alt+Shift+Escape | Quit the compositor |
 
 Click a window to focus it. Drag a title bar to move a window. To shut down or restart, open the launcher and type "shut" or "restart".
 
@@ -90,14 +90,22 @@ The same `compositor/` and `shell/` also build on Ubuntu 26.04, where apps come 
 
 ```sh
 distro/vm.sh create    # once: make a test VM from Ubuntu's cloud image
-distro/vm.sh start     # boot it; a window opens
-distro/vm.sh install   # copy this repo in, build it, install it
+distro/vm.sh start     # boot it; a window opens (default 1920x1080, SCREEN=1280x800 for another size, GPU=1 to draw on the GPU)
+distro/vm.sh install   # copy this repo in, build the package, install it
 distro/vm.sh ssh PerkinsOS/distro/apps.sh       # a file manager, VS Code, Discord, Blender, Inkscape, OBS, ...
 distro/vm.sh ssh PerkinsOS/distro/apps.sh pin   # put the main ones on the dock
 distro/vm.sh stop
 ```
 
-Tested there: the Thunar file manager, Firefox (with file dialogs), VS Code, Discord, Blender, Inkscape, OBS Studio and DB Browser for SQLite open and work, with Noto fonts for other languages and emoji. Which apps work and why some needed help: [docs/APPS.md](docs/APPS.md). Apps that only speak X11 (Steam, IntelliJ, PyCharm) need XWayland, which is next; the VM already has the XWayland server installed. This path has no automated test yet.
+On any Ubuntu 26.04 machine, PerkinsOS installs as a package, so apt can upgrade and remove it like any other program:
+
+```sh
+make -C distro deb
+sudo apt install ./distro/build/deb/perkinsos_*.deb
+perkinsos-start        # from a console login; or the login screen: sudo make -C distro install-login PREFIX=/usr
+```
+
+Tested there: the Thunar file manager, Firefox (with file dialogs), VS Code, Discord, Blender, Inkscape, OBS Studio and DB Browser for SQLite open and work, with Noto fonts for other languages and emoji. Which apps work and why some needed help: [docs/APPS.md](docs/APPS.md). Apps that only speak X11 (Steam, IntelliJ, PyCharm) need XWayland, which is next; the VM already has the XWayland server installed. CI builds this path on every push, in an Ubuntu 26.04 container against Ubuntu's own wlroots (the `distro` job), checks that `make install` has every file it copies, and builds the `.deb` and installs it with apt; it does not start the desktop there.
 
 ## Repo layout
 
@@ -128,11 +136,17 @@ Since then: the cockpit, and the start of a longer goal, using PerkinsOS in plac
 - [ ] An hour of normal use in the VM: title bars, minimise, launcher clicks
   - [x] Alt+Tab, Alt+drag move and resize, shut down and restart from the launcher
   - [x] File dialogs, fonts for other languages, everyday apps installed and pinned (`distro/apps.sh`)
+  - [x] Title bars with a close button, for apps that let the compositor draw them (`xdg-decoration`)
+  - [x] Minimise, from the title bar or the app's own button; Alt+Tab brings the window back
+  - [x] Launcher clicks and key repeat; the window's name in the title bar
+  - [x] Fullscreen
 - [ ] XWayland, for apps that only speak X11 (Steam, IntelliJ, PyCharm)
 - [ ] Draw with the graphics card
 - [ ] Lock screen, notifications, sound, login
   - [x] Notifications in the HUD style, sound, saved passwords, password prompts
+  - [x] Login screen (greetd and tuigreet)
 - [ ] Boot my laptop from a USB stick
+  - [x] A USB image that boots through UEFI to the login screen and the cockpit, in QEMU (`distro/usb.sh`)
 - [ ] Install beside Windows
 - [ ] A month without Windows: 1.0
 
@@ -151,8 +165,8 @@ The pixel font, VT323 (Copyright 2011, The VT323 Project Authors), is under the 
 
 Ideas parked here so they don't derail the plan. The long-term goal, running real apps and using this instead of Windows, has its own plan, [docs/PLAN-DAILY-DRIVER.md](docs/PLAN-DAILY-DRIVER.md), and a roadmap of milestones, [docs/ROADMAP.md](docs/ROADMAP.md).
 
-- Key repeat in the launcher, and clicking a result to start it
-- Icons on the dock; System Info as cockpit gauges
-- Server-side title bars, so every window gets the same one
+- Icons on the dock
+- A Settings page on the cockpit's centre display
+- Title bars for GTK apps too (they draw their own: GTK does not speak `xdg-decoration`)
 - Multiple screens: layer surfaces and maximize currently assume the first one
-- Real weather outside the jet: the cloud deck matches the real cloud cover where I am. A fetcher (systemd timer, Open-Meteo, location from a config file) writes a small weather file; the wallpaper reads it and sets the sea/cloud threshold in `sky.c` to the matching percentile of the cloud texture. Later: rain on the canopy, night sky, wind speed
+- Real weather outside the jet: the cloud deck matches the real cloud cover where I am. A fetcher (systemd timer, Open-Meteo, location from a config file) writes a small weather file; the wallpaper reads it and sets the sea/cloud threshold in `sky.c` to the matching percentile of the cloud texture. The fetcher is written (`distro/perkinsos-weather`, off until you make its config file); the wallpaper does not read the file yet. Later: rain on the canopy, night sky, wind speed

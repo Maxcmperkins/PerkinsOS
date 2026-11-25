@@ -1,0 +1,7 @@
+[Unit]
+Description=Fetch the weather every 20 minutes
+PartOf=graphical-session.target
+
+[Timer]
+OnActiveSec=15s
+OnUnitInactiveSec=20min
