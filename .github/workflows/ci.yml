@@ -79,7 +79,10 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             build-essential pkg-config libwlroots-0.19-dev libwayland-dev \
-            wayland-protocols libxkbcommon-dev libcairo2-dev
+            wayland-protocols libxkbcommon-dev libcairo2-dev python3
+
+      - name: Test the Python tools
+        run: python3 ci/test_tools.py
 
       - name: Build the compositor and shell
         run: make -C distro
@@ -105,7 +108,16 @@ jobs:
           perkinsos-compositor -h
           dpkg -L perkinsos
 
+      # Skips itself until the compositor can lock (see the script).
+      - name: Screen locking
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            swaylock wayland-utils fonts-dejavu-core
+          bash distro/test-lock.sh
+
       - name: Check the distro scripts parse
         run: |
           for f in distro/*.sh; do bash -n "$f"; done
-          sh -n distro/perkinsos-start
+          for f in start report lock volume brightness; do
+            sh -n "distro/perkinsos-$f"
+          done
