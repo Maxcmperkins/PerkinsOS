@@ -1,0 +1,13 @@
+# Lock after 5 minutes without a key or the mouse, and before sleeping.
+# ExecCondition: until the compositor speaks ext-session-lock and
+# ext-idle-notify this is skipped, not failed, and starts working by itself
+# once it does.
+[Unit]
+Description=PerkinsOS screen locking
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecCondition=@PREFIX@/bin/perkinsos-lock --supported
+ExecStart=/usr/bin/swayidle -w timeout 300 @PREFIX@/bin/perkinsos-lock before-sleep @PREFIX@/bin/perkinsos-lock lock @PREFIX@/bin/perkinsos-lock
+Restart=on-failure

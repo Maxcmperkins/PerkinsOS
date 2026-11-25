@@ -23,7 +23,8 @@
 # libnotify-bin (notifications), pipewire-audio, wireplumber and pavucontrol
 # (sound), gnome-keyring and libsecret-tools (saved passwords), and
 # mate-polkit and pkexec (password prompts). The login screen
-# (install-login): greetd and tuigreet.
+# (install-login): greetd and tuigreet. The weather fetcher: python3. The lock screen: swaylock, swayidle and
+# wayland-utils. The brightness keys: brightnessctl.
 
 PREFIX ?= /usr/local
 PKG_CONFIG ?= pkg-config
@@ -88,8 +89,10 @@ install:
 		install -D -m 0755 $(BUILD)/perkinsos-$$name $(DESTDIR)$(PREFIX)/bin/perkinsos-$$name || exit 1; \
 	done
 	install -D -m 0755 $(OVERLAY)/usr/bin/perkinsos-session $(DESTDIR)$(PREFIX)/bin/perkinsos-session
-	sed 's|@PREFIX@|$(PREFIX)|' perkinsos-start > $(BUILD)/perkinsos-start
-	install -D -m 0755 $(BUILD)/perkinsos-start $(DESTDIR)$(PREFIX)/bin/perkinsos-start
+	for name in start report lock volume brightness weather; do \
+		sed 's|@PREFIX@|$(PREFIX)|g' perkinsos-$$name > $(BUILD)/script || exit 1; \
+		install -D -m 0755 $(BUILD)/script $(DESTDIR)$(PREFIX)/bin/perkinsos-$$name || exit 1; \
+	done
 	install -d $(DESTDIR)$(PREFIX)/share/perkinsos/models
 	install -m 0644 $(OVERLAY)/usr/share/perkinsos/models/*.mesh $(DESTDIR)$(PREFIX)/share/perkinsos/models/
 	# The terminal's colours. Not in /etc/xdg/foot: that file belongs to
@@ -115,6 +118,11 @@ install:
 	mkdir -p $(DESTDIR)$(PREFIX)/lib/systemd/user/mako.service.d
 	sed 's|@PREFIX@|$(PREFIX)|' mako-perkinsos.conf \
 		> $(DESTDIR)$(PREFIX)/lib/systemd/user/mako.service.d/perkinsos.conf
+	for unit in idle.service weather.service weather.timer; do \
+		sed 's|@PREFIX@|$(PREFIX)|g' perkinsos-$$unit \
+			> $(DESTDIR)$(PREFIX)/lib/systemd/user/perkinsos-$$unit || exit 1; \
+	done
+	install -D -m 0644 swaylock.config $(DESTDIR)$(PREFIX)/share/perkinsos/swaylock.config
 
 # The login screen: greetd with tuigreet (greetd.toml says how). Separate
 # from `install` because it replaces the machine's login: afterwards the

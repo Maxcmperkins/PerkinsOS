@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Fetch the weather for the wallpaper to show outside the cockpit.
+
+Run by perkinsos-weather.timer. Off until you make
+~/.config/perkinsos/weather.conf, two lines (your own numbers):
+
+    latitude=51.5
+    longitude=-0.1
+
+They are rounded to 0.1 degree (about 10 km) before being sent to
+open-meteo.com, which needs no account. The result goes to
+~/.cache/perkinsos/weather, one name=value per line, for the wallpaper:
+
+    time         when the observation was made, seconds since 1970
+    cloud_cover  0..100 percent
+    rain         mm in the last 15 minutes
+    wind         km/h
+    wind_from    degrees, where it blows from (0 is north)
+    temperature  degrees C
+    is_day       1 or 0
+
+If fetching fails the old file is left alone, so check `time`.
+"""
+import json
+import math
+import os
+import sys
+import urllib.parse
+import urllib.request
+
+URL = "https://api.open-meteo.com/v1/forecast"
+# Our name: the service's name for it.
+FIELDS = {
+    "cloud_cover": "cloud_cover", "rain": "precipitation",
+    "wind": "wind_speed_10m", "wind_from": "wind_direction_10m",
+    "temperature": "temperature_2m", "is_day": "is_day",
+}
+
+
+def folder(variable, default):
+    base = os.environ.get(variable) or os.path.expanduser(default)
+    return os.path.join(base, "perkinsos")
+
+
+def read_config(path):
+    values = {}
+    with open(path) as f:
+        for line in f:
+            name, found, value = line.partition("=")
+            if found and not line.lstrip().startswith("#"):
+                values[name.strip()] = value.strip()
+    latitude, longitude = float(values["latitude"]), float(values["longitude"])
+    # "not (... <= ...)" also catches nan, which float() accepts.
+    if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+        raise ValueError("latitude or longitude out of range")
+    return round(latitude, 1), round(longitude, 1)
+
+
+def make_url(latitude, longitude):
+    return URL + "?" + urllib.parse.urlencode({
+        "latitude": latitude, "longitude": longitude,
+        "current": ",".join(FIELDS.values()), "timeformat": "unixtime"})
+
+
+def to_lines(reply):
+    """The service's JSON as our file's text. Only numbers get through, so
+    the wallpaper never reads anything odd from the network."""
+    current = reply["current"]
+    lines = ["time=%d\n" % current["time"]]
+    for ours, theirs in FIELDS.items():
+        value = float(current[theirs])
+        if not math.isfinite(value):
+            raise ValueError(theirs + " is not a number")
+        lines.append("%s=%g\n" % (ours, value))
+    return "".join(lines)
+
+
+def write_whole(path, text):
+    """Write a new file, then swap it in: a reader never sees half of it."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + ".new", "w") as f:
+        f.write(text)
+    os.replace(path + ".new", path)
+
+
+def main():
+    try:
+        where = read_config(os.path.join(folder("XDG_CONFIG_HOME", "~/.config"),
+                                         "weather.conf"))
+        with urllib.request.urlopen(make_url(*where), timeout=20) as reply:
+            text = to_lines(json.load(reply))
+        write_whole(os.path.join(folder("XDG_CACHE_HOME", "~/.cache"), "weather"),
+                    text)
+    except (OSError, KeyError, TypeError, ValueError) as problem:
+        sys.exit("perkinsos-weather: %s: %s" % (type(problem).__name__, problem))
+
+
+if __name__ == "__main__":
+    main()

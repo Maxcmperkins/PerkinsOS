@@ -1,0 +1,20 @@
+#!/bin/sh
+# Lock the screen, with swaylock in the HUD's colours.
+#
+#   perkinsos-lock               lock
+#   perkinsos-lock --supported   can the compositor lock? (exit status)
+#
+# swaylock needs the compositor to speak ext-session-lock-v1. Locking any
+# other way (a window over everything) is not secure, so there is no
+# fallback: without it, this fails and says so. swaylock checks the
+# password through PAM; its package installs /etc/pam.d/swaylock.
+if [ "${1:-}" = --supported ]; then
+	offered=$(wayland-info 2> /dev/null) || exit 1
+	echo "$offered" | grep -q ext_session_lock_manager_v1 &&
+		echo "$offered" | grep -q ext_idle_notifier_v1
+	exit
+fi
+# No check for a swaylock that is already running: it may belong to another
+# session, and the compositor refuses a second locker by itself.
+# -f: return once the screen is locked, so that "lock, then sleep" works.
+exec swaylock -f --config @PREFIX@/share/perkinsos/swaylock.config

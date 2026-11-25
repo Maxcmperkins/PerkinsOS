@@ -1,0 +1,8 @@
+[Unit]
+Description=Fetch the weather for the PerkinsOS wallpaper
+# Off until you say where you are (see perkinsos-weather).
+ConditionPathExists=%E/perkinsos/weather.conf
+
+[Service]
+Type=oneshot
+ExecStart=@PREFIX@/bin/perkinsos-weather

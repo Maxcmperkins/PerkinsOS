@@ -1,0 +1,28 @@
+#!/bin/sh
+# Change the volume and show it. For the compositor's volume keys.
+#   perkinsos-volume up|down|mute|mic-mute
+set -eu
+sink=@DEFAULT_AUDIO_SINK@
+case "${1:-}" in
+# -l 1.0: never above 100%. Turning it up also unmutes.
+up) wpctl set-mute $sink 0; wpctl set-volume -l 1.0 $sink 5%+ ;;
+down) wpctl set-volume $sink 5%- ;;
+mute) wpctl set-mute $sink toggle ;;
+mic-mute) sink=@DEFAULT_AUDIO_SOURCE@; wpctl set-mute $sink toggle ;;
+*) echo "usage: perkinsos-volume up|down|mute|mic-mute" >&2; exit 2 ;;
+esac
+
+# wpctl prints "Volume: 0.45" and, if muted, " [MUTED]".
+state=$(wpctl get-volume $sink)
+percent=$(echo "$state" | awk '{ printf "%d", $2 * 100 + 0.5 }')
+name=VOLUME
+[ "$1" != mic-mute ] || name=MICROPHONE
+case "$state" in
+*MUTED*) text="$name MUTED" ;;
+*) text="$name $percent%" ;;
+esac
+# The first hint makes each message replace the one before instead of
+# piling up; the second draws the bar.
+command -v notify-send > /dev/null || exit 0
+notify-send -t 1500 -h string:x-canonical-private-synchronous:volume \
+	-h "int:value:$percent" "$text" || true
