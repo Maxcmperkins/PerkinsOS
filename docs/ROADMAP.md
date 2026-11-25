@@ -12,8 +12,7 @@ Version 1.0 is: PerkinsOS is installed on my laptop, I use it every day for a mo
 
 - Runs in QEMU two ways: the Buildroot image (`make run`) and on Ubuntu 26.04 (`distro/vm.sh`).
 - On Ubuntu: the launcher lists installed apps, and Firefox starts from it and loads a page.
-- Everything is drawn on the CPU. It has never run on real hardware.
-- A lot of work is not committed, and CI has not run since week 8.
+- Drawn on the CPU, or on the graphics card where there is a real one (M2). It has never run on real hardware.
 
 ## Sizes
 
@@ -34,6 +33,8 @@ Nothing new; make what exists safe.
 **Done when:** `git status` is clean, GitHub shows the cockpit, and CI passes.
 
 **Status, 17 November 2026:** committed and pushed, CI passes, and both aircraft models' licences are recorded in the README. Still to do, both by Max: make KVM permanent, and bring `CLAUDE.md` up to date.
+
+**25 November 2026:** KVM works after a WSL restart (`/etc/wsl.conf`), and `CLAUDE.md` has a draft update for Max to check.
 
 ### M1. An hour in the VM without ssh (M)
 
@@ -83,6 +84,11 @@ The services every desktop app assumes are there.
 
 **Login screen (19 Nov 2026), on Ubuntu:** greetd with tuigreet in the HUD's greens (`distro/greetd.toml`, installed by `sudo make -C distro install-login`). Tested in the VM: it boots to the desktop, quitting the desktop shows the login screen, and logging in with a password starts the desktop again. Opening downloads also works now: pictures, PDFs, text and zip files open in light GTK apps (Ristretto, Atril, Mousepad, Xarchiver), and links in Firefox (`distro/apps.sh`).
 
+**Around the compositor (25 Nov 2026), on Ubuntu:** ready for compositor code to use:
+
+- *Locking:* `perkinsos-lock` (swaylock in the HUD's colours) and `perkinsos-idle.service` (swayidle: after 5 minutes, and before sleep). Skipped until the compositor offers `ext-session-lock` and `ext-idle-notify`. `distro/test-lock.sh` runs in CI and skips itself until then; `STRICT=1` makes it fail. Plain Sway passes it, so a failure is ours.
+- *Volume and brightness:* `perkinsos-volume up|down|mute|mic-mute` and `perkinsos-brightness up|down`, for key bindings. Volume is tested in the VM; brightness is not (a VM has no backlight).
+
 ### M4. Boot the laptop from a USB stick (L)
 
 Stage 2 of the plan. First contact with real hardware: MSI Prestige 14 AI Studio, Intel Arc graphics, Intel BE200 wifi.
@@ -97,6 +103,8 @@ Stage 2 of the plan. First contact with real hardware: MSI Prestige 14 AI Studio
 **Done when:** the laptop boots from the USB to the cockpit, joins my wifi, and Firefox loads a page.
 
 **Status (19 Nov 2026), the image:** `distro/usb.sh build` makes `output/usb/perkinsos-usb.img`, 24 GB, for a 32 GB stick: Ubuntu 26.04 with the desktop, the full kernel, firmware for the Arc graphics and BE200 wifi, NetworkManager and Firefox. No automatic login, no ssh, and sudo asks for the password (`perkinsos`: change it with `passwd` after the first login; greetd cannot force the change). `distro/usb.sh test` boots it in QEMU through UEFI with nothing else helping: it reaches the login screen, logs in to the cockpit, and NetworkManager is connected. Next: write it to a stick (Rufus or balenaEtcher, "DD image") and boot the laptop. Wifi, the touchpad and the screen are untested until then.
+
+**25 Nov 2026:** the image now keeps the NVIDIA drivers from loading. `perkinsos-report` writes what the machine is and what works to one file. The image was rebuilt and boots in QEMU; that build does not have the report, theme or crash recovery yet, so build again before writing it to a stick.
 
 ### M5. Install it beside Windows (M)
 
@@ -122,6 +130,10 @@ Stage 4. Fix what stops me, most painful first. Expected:
 - Battery life within reach of Windows.
 
 **Done when:** one full day of my normal use without booting Windows.
+
+**25 Nov 2026, crash recovery:** `perkinsos-start` restarts the desktop after a crash, keeps the last five logs (`~/.local/state/perkinsos-desktop.log.1` to `.5`), and goes back to the login screen after three quick crashes. Open apps are still lost. Tested in the VM by killing the compositor.
+
+**Look:** GTK apps, file icons and the mouse cursor match the HUD (`distro/theme/`), only in a PerkinsOS session. `make -C distro install-splash` adds a radar boot splash.
 
 ### M7. A month, then 1.0 (M)
 

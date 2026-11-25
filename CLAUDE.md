@@ -5,7 +5,7 @@ This is a learning project and a portfolio piece. Max must be able to explain ev
 ## Ownership rules
 
 - `compositor/` and `shell/` — **Max writes this code.** Do not write or edit code here unless he explicitly says "write it" for a specific change. Default to: explain the concept, point at the relevant wlroots/Wayland docs or TinyWL lines, review his code, suggest what to try next. Small snippets (< 10 lines) to illustrate an API are fine.
-- `buildroot/`, `ci/`, `Makefile`, tooling — **Claude may write and edit freely.** Explain non-obvious choices in a short comment or the commit message.
+- `buildroot/`, `distro/`, `ci/`, `Makefile`, tooling — **Claude may write and edit freely.** Explain non-obvious choices in a short comment or the commit message.
 - `docs/` — Claude may draft; Max edits the final wording.
 
 ## When reviewing Max's code
@@ -17,10 +17,11 @@ This is a learning project and a portfolio piece. Max must be able to explain ev
 ## Project facts
 
 - Host: Windows x64 laptop, building inside WSL2 Ubuntu.
-- Target: x86_64, run in QEMU with virtio-gpu.
-- Stack: Buildroot image, Linux kernel, wlroots (C), compositor forked from TinyWL.
+- The repo is `~/PerkinsOS` inside WSL.
+- Target: x86_64, two ways: the Buildroot image in QEMU (the demo and the main CI test), and Ubuntu 26.04 (`distro/`), in a VM now and on the laptop later.
+- Stack: wlroots 0.19 (C), compositor forked from TinyWL; Buildroot or Ubuntu underneath.
 - Pin one wlroots version; only use TinyWL from that same version.
-- Scope is fixed by `docs/PLAN.md`. New feature ideas go in the README's "Later" list, not into code.
+- `docs/PLAN.md` (the first eight weeks) is finished. Scope is now `docs/ROADMAP.md`. New feature ideas go in the README's "Later" list, not into code.
 
 ## Commits
 

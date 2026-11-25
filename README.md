@@ -169,4 +169,4 @@ Ideas parked here so they don't derail the plan. The long-term goal, running rea
 - A Settings page on the cockpit's centre display
 - Title bars for GTK apps too (they draw their own: GTK does not speak `xdg-decoration`)
 - Multiple screens: layer surfaces and maximize currently assume the first one
-- Real weather outside the jet: the cloud deck matches the real cloud cover where I am. A fetcher (systemd timer, Open-Meteo, location from a config file) writes a small weather file; the wallpaper reads it and sets the sea/cloud threshold in `sky.c` to the matching percentile of the cloud texture. Later: rain on the canopy, night sky, wind speed
+- Real weather outside the jet: the cloud deck matches the real cloud cover where I am. A fetcher (systemd timer, Open-Meteo, location from a config file) writes a small weather file; the wallpaper reads it and sets the sea/cloud threshold in `sky.c` to the matching percentile of the cloud texture. The fetcher is written (`distro/perkinsos-weather`, off until you make its config file); the wallpaper does not read the file yet. Later: rain on the canopy, night sky, wind speed
