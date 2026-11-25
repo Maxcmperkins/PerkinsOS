@@ -1,0 +1,60 @@
+/* The HUD's greens for GTK 3 and 4 apps: the same colours as
+ * shell/common/theme.h. gtk-3.css and gtk-4.css each load GTK's own dark
+ * theme, for shapes and spacing, and then this. */
+
+/* Names other programs read, Firefox among them. */
+@define-color theme_bg_color #010603;
+@define-color theme_fg_color #33ff66;
+@define-color theme_base_color #010603;
+@define-color theme_text_color #33ff66;
+@define-color theme_selected_bg_color #33ff66;
+@define-color theme_selected_fg_color #010603;
+@define-color insensitive_bg_color #040f08;
+@define-color insensitive_fg_color #177330;
+@define-color borders #177330;
+@define-color link_color #66ddaa;
+
+/* Square corners and thin green lines, like the dock and launcher. */
+window, dialog, menu, popover, button, entry, headerbar, notebook, tooltip,
+scrollbar slider, progressbar progress, progressbar trough, .titlebar {
+	border-radius: 0;
+}
+window, .background { background-color: #010603; color: #33ff66; }
+headerbar, .titlebar {
+	background: #040f08;
+	border-bottom: 1px solid #177330;
+	color: #33ff66;
+	box-shadow: none;
+}
+.view, textview text, iconview, treeview.view, list, row {
+	background-color: #010603;
+	color: #33ff66;
+}
+toolbar, .sidebar, .sidebar .view, placessidebar { background-color: #040f08; }
+button {
+	background: #040f08;
+	border: 1px solid #177330;
+	color: #33ff66;
+	box-shadow: none;
+	text-shadow: none;
+}
+button:hover { border-color: #33ff66; }
+button:active, button:checked { background: #177330; color: #ccffd9; }
+button:disabled { color: #177330; }
+entry { background: #010603; border: 1px solid #177330; color: #33ff66; }
+entry:focus { border-color: #33ff66; }
+menu, popover, popover > contents, menubar, tooltip {
+	background-color: #040f08;
+	border: 1px solid #177330;
+	color: #33ff66;
+}
+menubar { border-width: 0 0 1px 0; }
+menuitem:hover, modelbutton:hover { background-color: #177330; }
+/* Selected things are black on green, as in the launcher. `label` and
+ * `image` too: their own colour is green, and would vanish. */
+selection, text selection, row:selected, row:selected label,
+row:selected image, iconview:selected, .view:selected,
+treeview.view:selected {
+	background-color: #33ff66;
+	color: #010603;
+}

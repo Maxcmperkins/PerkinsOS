@@ -64,7 +64,7 @@ PACKAGES="build-essential pkg-config libwlroots-0.19-dev libwayland-dev \
 	xwayland x11-apps \
 	mako-notifier libnotify-bin pipewire-audio wireplumber pavucontrol \
 	gnome-keyring libsecret-tools mate-polkit pkexec greetd tuigreet \
-	python3 swaylock swayidle wayland-utils brightnessctl"
+	python3 librsvg2-common swaylock swayidle wayland-utils brightnessctl"
 # The test VM's password for "max", for the login screen and password
 # prompts. Not a secret: the VM is a throwaway, ssh into it takes the key
 # only, and nothing outside this machine can reach it.

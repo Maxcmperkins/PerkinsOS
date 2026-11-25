@@ -23,7 +23,8 @@
 # libnotify-bin (notifications), pipewire-audio, wireplumber and pavucontrol
 # (sound), gnome-keyring and libsecret-tools (saved passwords), and
 # mate-polkit and pkexec (password prompts). The login screen
-# (install-login): greetd and tuigreet. The weather fetcher: python3. The lock screen: swaylock, swayidle and
+# (install-login): greetd and tuigreet. Building also needs python3 (it draws
+# the cursors and icons). The lock screen: swaylock, swayidle and
 # wayland-utils. The brightness keys: brightnessctl.
 
 PREFIX ?= /usr/local
@@ -53,9 +54,16 @@ SHELL_LIBS := $(shell $(PKG_CONFIG) --libs $(SHELL_PKGS)) -lm
 SHELL_PROTOCOLS := $(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml \
 	$(WLR_PROTOCOLS)/wlr-layer-shell-unstable-v1.xml
 
-.PHONY: all compositor shell install install-login deb version clean
+.PHONY: all compositor shell theme install install-login \
+	deb version clean
 
-all: compositor shell
+all: compositor shell theme
+
+# Pictures drawn by scripts, so that no artwork is kept in the repo.
+theme:
+	rm -rf $(BUILD)/theme
+	python3 theme/make-cursors.py $(BUILD)/theme/cursors
+	python3 theme/make-icons.py $(BUILD)/theme
 
 # The compositor has its own Makefile (it came with TinyWL). It writes its
 # output next to its source, so build a copy and keep compositor/ clean.
@@ -123,6 +131,23 @@ install:
 			> $(DESTDIR)$(PREFIX)/lib/systemd/user/perkinsos-$$unit || exit 1; \
 	done
 	install -D -m 0644 swaylock.config $(DESTDIR)$(PREFIX)/share/perkinsos/swaylock.config
+	# The look of apps (theme/): icons and cursors, the GTK theme, and the
+	# settings that choose them. The package leaves compiling the settings
+	# to dpkg, which does it for any package that adds some.
+	mkdir -p $(DESTDIR)$(PREFIX)/share/icons/PerkinsOS
+	cp -a $(BUILD)/theme/cursors $(BUILD)/theme/scalable $(DESTDIR)$(PREFIX)/share/icons/PerkinsOS/
+	install -m 0644 theme/index.theme $(DESTDIR)$(PREFIX)/share/icons/PerkinsOS/
+	install -D -m 0644 theme/default.theme \
+		$(DESTDIR)$(PREFIX)/share/perkinsos/icons/default/index.theme
+	install -D -m 0644 theme/gtk-common.css $(DESTDIR)$(PREFIX)/share/themes/PerkinsOS/gtk-common.css
+	for v in 3 4; do \
+		install -D -m 0644 theme/gtk-$$v.css \
+			$(DESTDIR)$(PREFIX)/share/themes/PerkinsOS/gtk-$$v.0/gtk.css || exit 1; \
+	done
+	install -D -m 0644 theme/perkinsos.gschema.override \
+		$(DESTDIR)$(PREFIX)/share/glib-2.0/schemas/90_perkinsos.gschema.override
+	[ -n "$(DESTDIR)" ] || ! command -v glib-compile-schemas > /dev/null || \
+		glib-compile-schemas $(PREFIX)/share/glib-2.0/schemas
 
 # The login screen: greetd with tuigreet (greetd.toml says how). Separate
 # from `install` because it replaces the machine's login: afterwards the

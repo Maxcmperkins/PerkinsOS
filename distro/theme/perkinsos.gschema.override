@@ -1,0 +1,10 @@
+# Settings GTK apps read, changed only on the PerkinsOS desktop: the name
+# after the colon is matched with XDG_CURRENT_DESKTOP, so GNOME on the same
+# machine keeps its own look. These are defaults; `gsettings set` still wins.
+[org.gnome.desktop.interface:PerkinsOS]
+gtk-theme='PerkinsOS'
+icon-theme='PerkinsOS'
+cursor-theme='PerkinsOS'
+cursor-size=24
+color-scheme='prefer-dark'
+font-name='VT323 14'
