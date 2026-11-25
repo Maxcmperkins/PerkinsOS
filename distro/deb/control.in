@@ -5,7 +5,7 @@ Maintainer: Max Perkins
 Installed-Size: @SIZE@
 Depends: @DEPENDS@, foot, fonts-dejavu-core
 Recommends: fonts-noto-core, fonts-noto-cjk, fonts-noto-color-emoji, xdg-desktop-portal, xdg-desktop-portal-gtk, xwayland, mako-notifier, libnotify-bin, pipewire-audio, wireplumber, gnome-keyring, libsecret-tools, mate-polkit, pkexec, gsettings-desktop-schemas, adwaita-icon-theme, librsvg2-common, swaylock, swayidle, wayland-utils, brightnessctl, python3
-Suggests: pavucontrol, greetd, tuigreet
+Suggests: pavucontrol, plymouth, plymouth-label, greetd, tuigreet
 Section: x11
 Priority: optional
 Description: cockpit-styled Wayland desktop

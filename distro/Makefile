@@ -24,8 +24,9 @@
 # (sound), gnome-keyring and libsecret-tools (saved passwords), and
 # mate-polkit and pkexec (password prompts). The login screen
 # (install-login): greetd and tuigreet. Building also needs python3 (it draws
-# the cursors and icons). The lock screen: swaylock, swayidle and
-# wayland-utils. The brightness keys: brightnessctl.
+# the cursors, icons and splash). The lock screen: swaylock, swayidle and
+# wayland-utils. The brightness keys: brightnessctl. The boot splash
+# (install-splash): plymouth, and plymouth-label for its password question.
 
 PREFIX ?= /usr/local
 PKG_CONFIG ?= pkg-config
@@ -54,16 +55,17 @@ SHELL_LIBS := $(shell $(PKG_CONFIG) --libs $(SHELL_PKGS)) -lm
 SHELL_PROTOCOLS := $(WAYLAND_PROTOCOLS)/stable/xdg-shell/xdg-shell.xml \
 	$(WLR_PROTOCOLS)/wlr-layer-shell-unstable-v1.xml
 
-.PHONY: all compositor shell theme install install-login \
+.PHONY: all compositor shell theme install install-login install-splash \
 	deb version clean
 
 all: compositor shell theme
 
 # Pictures drawn by scripts, so that no artwork is kept in the repo.
 theme:
-	rm -rf $(BUILD)/theme
+	rm -rf $(BUILD)/theme $(BUILD)/splash
 	python3 theme/make-cursors.py $(BUILD)/theme/cursors
 	python3 theme/make-icons.py $(BUILD)/theme
+	python3 splash/make-images.py $(BUILD)/splash
 
 # The compositor has its own Makefile (it came with TinyWL). It writes its
 # output next to its source, so build a copy and keep compositor/ clean.
@@ -158,6 +160,21 @@ install-login:
 	sed 's|@PREFIX@|$(PREFIX)|' greetd.toml > $(BUILD)/greetd.toml
 	install -D -m 0644 $(BUILD)/greetd.toml $(DESTDIR)/etc/greetd/config.toml
 	[ -n "$(DESTDIR)" ] || systemctl enable --force greetd.service
+
+# The boot splash (splash/). Separate, like the login screen: it changes how
+# the machine boots. ignore-serial-consoles: Ubuntu's cloud image also sends
+# its console to a serial port, where Plymouth would otherwise fall back to
+# text. To undo: remove the grub.d file, then update-grub.
+SPLASH := /usr/share/plymouth/themes/perkinsos
+install-splash:
+	install -d $(DESTDIR)$(SPLASH)
+	install -m 0644 splash/perkinsos.plymouth splash/perkinsos.script \
+		$(BUILD)/splash/*.png $(DESTDIR)$(SPLASH)/
+	install -D -m 0644 splash/grub.cfg $(DESTDIR)/etc/default/grub.d/90-perkinsos-splash.cfg
+	[ -n "$(DESTDIR)" ] || { \
+		update-alternatives --install /usr/share/plymouth/themes/default.plymouth \
+			default.plymouth $(SPLASH)/perkinsos.plymouth 200 && \
+		update-initramfs -u && update-grub; }
 
 # The package. It is built from scratch in build/deb/ with PREFIX=/usr,
 # where a distro's own packages go (/usr/local is for things installed by
