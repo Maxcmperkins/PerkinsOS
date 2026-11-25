@@ -45,7 +45,15 @@ def read_ppm(path):
     # Splitting on whitespace again would also eat the first pixels if their
     # bytes happen to be whitespace (a colour of 32 is a space).
     pixels = fields[3][len(b"255\n"):]
-    return width, height, pixels[: width * height * 3]
+    # QEMU pads each row to a multiple of 4 bytes, which PPM does not allow
+    # for, so at widths that are not a multiple of 4 each row would start a
+    # little late: a slanted picture in the wrong colours. Find the real row
+    # length from the amount of data and drop the padding.
+    row = width * 3
+    padded = (row + 3) // 4 * 4
+    stride = padded if len(pixels) == padded * height else row
+    return width, height, b"".join(
+        pixels[y * stride:y * stride + row] for y in range(height))
 
 
 def write_png(path, width, height, rgb):
