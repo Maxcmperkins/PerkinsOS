@@ -47,9 +47,43 @@ export XDG_CURRENT_DESKTOP=PerkinsOS
 export XDG_CONFIG_DIRS="@PREFIX@/share/perkinsos/xdg:${XDG_CONFIG_DIRS:-/etc/xdg}"
 
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}"
+LOG=$LOG_DIR/perkinsos-desktop.log
 mkdir -p "$LOG_DIR"
-# -s CMD: a command the compositor runs once it is ready (the wallpaper
-# and the dock).
-perkinsos-compositor -s perkinsos-session > "$LOG_DIR/perkinsos-desktop.log" 2>&1
-# The compositor has exited: the desktop session is over.
-systemctl --user stop perkinsos-session.target 2> /dev/null
+
+# Keep the logs of the last few runs: .1 is the one before this, up to .5.
+keep_logs() {
+	for n in 4 3 2 1; do
+		[ ! -e "$LOG.$n" ] || mv "$LOG.$n" "$LOG.$((n + 1))"
+	done
+	[ ! -e "$LOG" ] || mv "$LOG" "$LOG.1"
+}
+
+# Run the desktop, and start it again if it crashes. The open apps are
+# lost: they were connected to the compositor that died. Quitting gives
+# status 0. A signal gives 128 + its number; hang up, interrupt and
+# terminate (129, 130, 143) mean somebody asked it to stop, so stop. After
+# 3 crashes, each within a minute of starting, give up and go back to the
+# login screen, rather than restart for ever.
+crashes=0
+while :; do
+	keep_logs
+	started=$(date +%s)
+	# -s CMD: a command the compositor runs once it is ready (the
+	# wallpaper and the dock).
+	perkinsos-compositor -s perkinsos-session > "$LOG" 2>&1
+	status=$?
+	# The compositor has exited: the desktop session is over.
+	systemctl --user stop perkinsos-session.target 2> /dev/null
+	case $status in
+	0 | 129 | 130 | 143) exit 0 ;;
+	esac
+	[ $(($(date +%s) - started)) -lt 60 ] || crashes=0
+	crashes=$((crashes + 1))
+	echo "perkinsos-start: compositor exited with status $status" \
+		"(crash $crashes) at $(date)" >> "$LOG"
+	if [ "$crashes" -ge 3 ]; then
+		echo "perkinsos-start: giving up" >> "$LOG"
+		exit 1
+	fi
+	sleep 1
+done
