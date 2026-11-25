@@ -35,7 +35,7 @@ cd "$(dirname "$0")/.."
 export VM=output/usb/build SSH_PORT=2223 SEED_PORT=8766 DISK_SIZE=24G \
 	VM_HOSTNAME=perkinsos UEFI=1
 IMG=output/usb/perkinsos-usb.img
-HARDWARE="linux-generic linux-firmware network-manager wpasupplicant"
+HARDWARE="linux-generic linux-firmware network-manager wpasupplicant pciutils rfkill"
 PASSWORD=perkinsos               # the same as the test VM's (distro/vm.sh)
 
 running() {
@@ -89,6 +89,16 @@ echo 'max:$PASSWORD' | chpasswd
 # No way in from the network: the build's ssh key and the ssh server go.
 rm -f /home/max/.ssh/authorized_keys
 systemctl disable ssh.service ssh.socket 2> /dev/null || true
+# Leave the laptop's NVIDIA card alone (docs/PLAN-DAILY-DRIVER.md): the
+# screen is on the Intel graphics. Without this the kernel loads its own
+# NVIDIA drivers, and wlroots sees two graphics cards. The initramfs, which
+# starts the boot, has its own copy of these settings, so rebuild it.
+cat > /etc/modprobe.d/perkinsos-no-nvidia.conf <<'MODPROBE'
+blacklist nouveau
+blacklist nova_core
+blacklist nova_drm
+MODPROBE
+update-initramfs -u -k all
 apt-get clean
 # Last: sudo asks for the password from now on (cloud-init had made it
 # passwordless for max).
